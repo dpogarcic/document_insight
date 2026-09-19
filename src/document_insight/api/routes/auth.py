@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 
 from document_insight.api.dependencies import get_auth_service
-from document_insight.api.errors import AUTH_ERROR_RESPONSES, raise_api_error
+from document_insight.api.errors import AUTH_ERROR_RESPONSES
 from document_insight.api.schemas.auth import (
     AccessTokenResponse,
     LoginRequest,
@@ -13,10 +13,6 @@ from document_insight.api.schemas.auth import (
     UserResponse,
 )
 from document_insight.application.auth.contracts import RegisterUserCommand
-from document_insight.application.auth.exceptions import (
-    EmailAlreadyRegisteredError,
-    InvalidCredentialsError,
-)
 from document_insight.application.auth.service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -37,19 +33,12 @@ async def register_user(request: RegisterRequest, service: AuthServiceDependency
         display_name=request.display_name,
         tenant_name=request.tenant_name,
     )
-    try:
-        user = await service.register(command)
-    except EmailAlreadyRegisteredError:
-        raise_api_error(
-            status.HTTP_409_CONFLICT,
-            "email_already_registered",
-            "An account with this email address already exists.",
-        )
+    user = await service.register(command)
 
     return UserResponse(
         user_id=user.user_id,
         tenant_id=user.tenant_id,
-        department_id=user.department_id,
+        department_ids=list(user.department_ids),
         email=user.email,
         display_name=user.display_name,
         role=user.role,
@@ -63,14 +52,6 @@ async def register_user(request: RegisterRequest, service: AuthServiceDependency
 )
 async def login(request: LoginRequest, service: AuthServiceDependency) -> AccessTokenResponse:
     """Authenticate a local user and return a short-lived bearer token."""
-    try:
-        token = await service.login(str(request.email), request.password)
-    except InvalidCredentialsError:
-        raise_api_error(
-            status.HTTP_401_UNAUTHORIZED,
-            "invalid_credentials",
-            "The email address or password is invalid.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    token = await service.login(str(request.email), request.password)
 
     return AccessTokenResponse(access_token=token.value, expires_in=token.expires_in)

@@ -29,7 +29,7 @@ class UserResponse(ApiModel):
 
     user_id: UUID
     tenant_id: UUID
-    department_id: UUID
+    department_ids: list[UUID]
     email: EmailStr
     display_name: str
     role: UserRole

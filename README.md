@@ -5,13 +5,14 @@ content, and answering questions over authorized document evidence.
 
 ## Project status
 
-**Planning complete; authentication and API implementation in progress.**
+**Planning complete; authentication and ingestion implementation in progress.**
 
 The FastAPI application, typed request/response models, endpoint validation, and OpenAPI
 contract are implemented. Local registration and login are connected to PostgreSQL with
-Argon2 password hashing and short-lived signed JWT access tokens. Ingestion, job status,
-query, queues, object storage, and model providers are not connected yet; those endpoint
-calls currently return `501 Not Implemented`.
+Argon2 password hashing and short-lived signed JWT access tokens. Authenticated ingestion
+currently validates PDF, PNG, and JPEG uploads, stores immutable originals in local MinIO,
+and persists document/version metadata. Queueing, job status, query, and model providers
+are not connected yet.
 
 ## Planned capabilities
 
@@ -49,10 +50,10 @@ uv sync --group dev
 cp .env.example .env
 ```
 
-Start PostgreSQL with pgvector and apply migrations:
+Start PostgreSQL, pgvector, and the local S3-compatible object store, then apply migrations:
 
 ```bash
-docker compose up -d database
+docker compose up -d database object-storage object-storage-init
 uv run alembic upgrade head
 ```
 
@@ -64,17 +65,28 @@ uv run uvicorn document_insight.api.app:app --reload
 
 OpenAPI documentation is available at `http://127.0.0.1:8000/docs`.
 
+Every HTTP request receives a UUID correlation ID. A valid inbound `X-Correlation-ID` is
+preserved; otherwise the API generates one. The selected ID is returned in the
+`X-Correlation-ID` response header so clients can include it in support reports. Every
+server log line includes a `correlation_id` field; request-scoped logs and exception
+tracebacks use the response ID, while work outside an HTTP request uses `-`.
+
 | Method | Path | Contract | Status |
 | --- | --- | --- | --- |
 | `POST` | `/auth/register` | Provision a new tenant, General department, and tenant administrator | Implemented |
 | `POST` | `/auth/login` | Verify credentials and obtain a bearer token | Implemented |
-| `POST` | `/ingest` | Upload a PDF/image and optionally version an existing document | Contract only |
+| `POST` | `/ingest` | Store a PDF/image and optionally version an existing document | Storage stage implemented |
 | `GET` | `/jobs/{job_id}` | Read processing-job status | Contract only |
 | `POST` | `/query` | Query authorized documents with optional filters and `top_k` | Contract only |
 
 Registration intentionally creates a new tenant. Joining an existing tenant will use a
 future administrator-controlled invitation flow; public registration cannot select an
 existing tenant or self-assign a role.
+
+The current ingestion checkpoint returns `203` with `status: "stored"` after the original
+and its metadata are durable. It does not claim a processing job exists. The next queue
+slice will create the durable job, enqueue it, and replace this interim response with the
+planned `202 Accepted` response containing a job ID.
 
 Run the current checks with:
 

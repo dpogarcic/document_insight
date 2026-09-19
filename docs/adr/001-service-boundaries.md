@@ -50,6 +50,29 @@ We will build a Python application with logical service boundaries. FastAPI will
 - When the retrieved evidence is insufficient, the answer must explicitly say that the information is not available in the authorized documents. It must not invent an answer.
 - Routes stay thin: request/response models and transport errors belong in FastAPI; business decisions belong in application services.
 
+### Request tracing and correlation IDs
+
+- Every HTTP request has one correlation ID. The API preserves an inbound
+  `X-Correlation-ID` only when it is a valid UUID; otherwise it generates a new UUID so
+  untrusted header values cannot enter logs.
+- The selected value is stored on the request state and in a request-scoped context
+  variable. Application and infrastructure code can therefore add logs without passing
+  the correlation ID through every function signature.
+- Every HTTP response includes the selected value in `X-Correlation-ID`, including safe
+  error responses. A client can report this ID so operators can locate the corresponding
+  request and exception logs.
+- Every server log record includes a visible `correlation_id` field. Logs emitted during
+  a request use its UUID; process startup and other work outside an HTTP request use `-`.
+- The API emits a completion log containing correlation ID, method, path, response status,
+  and duration. It does not log query strings, request bodies, credentials, or document
+  content.
+- Unexpected exceptions retain their traceback in server logs under the same correlation
+  ID, while the HTTP response contains only a stable generic error and never the raw
+  exception message.
+- When queue processing is added, the API must persist and publish the correlation ID with
+  the job. The worker must bind it to its logging context so ingestion can be traced across
+  the HTTP and asynchronous-processing boundaries.
+
 ### Retrieval and AI providers
 
 - Application code depends on provider protocols/interfaces rather than a specific SDK. Each adapter translates its provider's protocol and capabilities into the application's expected embedding, reranking, or generation contract.
@@ -68,3 +91,5 @@ We will build a Python application with logical service boundaries. FastAPI will
 - Uploading a valid file creates a document and a job without blocking on processing.
 - A ready, authorized document can be queried through `POST /query` with traceable source citations.
 - Component interfaces can be replaced by fakes in unit tests.
+- A client-reported response correlation ID identifies the matching request logs and any
+  associated exception traceback without exposing internal error details.

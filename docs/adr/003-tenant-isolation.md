@@ -20,14 +20,20 @@ We will use locally managed users and signed access tokens for the exercise. Eve
 - Users register and log in through the local authentication endpoints. Passwords are stored as salted Argon2 hashes; plaintext passwords are never logged or stored.
 - Login issues a short-lived signed bearer token. Token signing material is supplied by secret configuration, not committed to the repository.
 - A department is a tenant-scoped organizational access boundary, for example `legal`, `finance`, `human_resources`, or `customer_support`. Department names are configured per tenant; they are not global labels shared across tenants.
-- Every non-admin user has one department membership in the first release. A document can be assigned to multiple departments through a `document_departments` association; its versions, chunks, entities, and embeddings inherit that department set for authorization. A department can contain many documents, so this is a many-to-many relationship.
+- Users can belong to multiple departments through the tenant-scoped `user_departments`
+  association. A document can also be assigned to multiple departments through
+  `document_departments`; its versions, chunks, entities, and embeddings inherit that
+  department set for authorization. Both relationships are many-to-many and constrained
+  to one tenant.
 - The first release supports `tenant_admin`, `editor`, and `viewer` roles. A `tenant_admin` can manage users and access all departments in its tenant; an `editor` can ingest, replace, and query documents in their own department; a `viewer` can query documents in their own department only.
 - Department scope is applied before `POST /query` retrieval. It also drives document-library UI grouping. Role permissions decide whether a user can create, view, or version a document; department scope decides which documents that permission can apply to.
 
 ### Department assignment and administration
 
 - A new document's department set is determined during request authorization and persisted through `document_departments` when the document row is created, before the processing job is queued.
-- When an `editor` creates a document, the API automatically assigns the editor's own department as its initial department. The editor cannot select, add, or remove departments.
+- When an `editor` creates a document, the API permits only a non-empty subset of the
+  editor's own departments. If the editor omits a selection, all of their current
+  departments are assigned. The editor cannot add or remove assignments later.
 - A `tenant_admin` can select one or more departments within their tenant when creating a document, and is the only role allowed to add or remove department assignments later. Every change is audited with actor, timestamp, prior set, and new set.
 - A replacement upload with an existing `document_id` inherits its logical document's full department set. Versioning cannot change department assignments.
 - Department associations use a unique `(document_id, department_id)` key. Retrieval metadata keeps a synchronized department-set projection where required by the lexical/vector backend, while the relational association remains the authorization source of truth.
@@ -40,7 +46,9 @@ Authorization is resolved in this order:
 
 1. Authenticate the user and validate the token.
 2. Resolve the tenant from the authenticated identity, never from an untrusted request field.
-3. Resolve the user's department and role permissions. A `tenant_admin` receives all departments in the tenant; other users receive only their assigned department.
+3. Resolve the user's department memberships and role permissions. A `tenant_admin` may
+   act on any department in the tenant; other users receive only their assigned department
+   set.
 4. Build an authorization scope containing the permitted tenant, departments, and roles/classifications. A non-admin document is eligible only when its department set intersects the user's permitted departments.
 5. Apply that scope as a mandatory predicate to document metadata, SQL queries, vector search, lexical search, source lookup, and answer generation.
 

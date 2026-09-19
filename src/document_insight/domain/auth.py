@@ -19,7 +19,7 @@ class RegisteredUser:
 
     user_id: UUID
     tenant_id: UUID
-    department_id: UUID
+    department_ids: tuple[UUID, ...]
     email: str
     display_name: str
     role: UserRole
@@ -38,3 +38,13 @@ class AccessToken:
 
     value: str
     expires_in: int
+
+
+@dataclass(frozen=True, slots=True)
+class AuthenticatedUser:
+    """Trusted authorization claims extracted from a validated access token."""
+
+    user_id: UUID
+    tenant_id: UUID
+    department_ids: tuple[UUID, ...]
+    role: UserRole

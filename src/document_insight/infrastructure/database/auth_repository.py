@@ -10,6 +10,7 @@ from document_insight.domain.auth import RegisteredUser, StoredUser, UserRole
 from document_insight.infrastructure.database.models import (
     DepartmentModel,
     TenantModel,
+    UserDepartmentModel,
     UserModel,
 )
 
@@ -45,7 +46,6 @@ class SqlAlchemyAuthRepository:
 
                 user = UserModel(
                     tenant_id=tenant.id,
-                    department_id=department.id,
                     email=normalized_email,
                     display_name=command.display_name.strip(),
                     password_hash=password_hash,
@@ -53,13 +53,20 @@ class SqlAlchemyAuthRepository:
                 )
                 self._session.add(user)
                 await self._session.flush()
+                self._session.add(
+                    UserDepartmentModel(
+                        user_id=user.id,
+                        department_id=department.id,
+                        tenant_id=tenant.id,
+                    )
+                )
         except IntegrityError as error:
             raise EmailAlreadyRegisteredError from error
 
         return RegisteredUser(
             user_id=user.id,
             tenant_id=user.tenant_id,
-            department_id=user.department_id,
+            department_ids=(department.id,),
             email=user.email,
             display_name=user.display_name,
             role=UserRole(user.role),
@@ -70,10 +77,20 @@ class SqlAlchemyAuthRepository:
         user = await self._session.scalar(select(UserModel).where(UserModel.email == email))
         if user is None:
             return None
+        department_ids = tuple(
+            await self._session.scalars(
+                select(UserDepartmentModel.department_id)
+                .where(
+                    UserDepartmentModel.user_id == user.id,
+                    UserDepartmentModel.tenant_id == user.tenant_id,
+                )
+                .order_by(UserDepartmentModel.department_id)
+            )
+        )
         return StoredUser(
             user_id=user.id,
             tenant_id=user.tenant_id,
-            department_id=user.department_id,
+            department_ids=department_ids,
             email=user.email,
             display_name=user.display_name,
             role=UserRole(user.role),

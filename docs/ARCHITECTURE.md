@@ -30,7 +30,7 @@ flowchart LR
 | Component | Responsibility |
 | --- | --- |
 | Web application UI | Provides the document library and chat interface. It groups documents by department, allows tenant admins to manage a document's department assignments, sends an existing `document_id` only when the user replaces that logical document, and sends user questions to `POST /query`. |
-| FastAPI API / gateway | The single public API; authenticates, authorizes, rate-limits, stores uploads, creates jobs, and orchestrates queries. |
+| FastAPI API / gateway | The single public API; authenticates, authorizes, rate-limits, assigns correlation IDs, stores uploads, creates jobs, and orchestrates queries. |
 | Object storage | Holds immutable original document versions. |
 | PostgreSQL and pgvector | System of record for tenants, departments, users, logical documents, versions, jobs, chunks, entities, embeddings, and authorization metadata. |
 | Redis / RQ | Delivers asynchronous processing jobs; PostgreSQL remains authoritative for job state. |
@@ -39,12 +39,33 @@ flowchart LR
 
 ## Data flow
 
+### Request tracing
+
+1. The API accepts an inbound `X-Correlation-ID` only when it is a valid UUID. Missing or
+   invalid values are replaced with a generated UUID.
+2. Middleware binds the selected value to `request.state.correlation_id` and a
+   request-scoped context variable. All server log records contain a `correlation_id`
+   field; logs outside HTTP request scope use `-`.
+3. A completion log records the request method, path, response status, and duration. Query
+   strings, request bodies, credentials, and document content are excluded.
+4. Every response returns the ID in `X-Correlation-ID`, including unexpected-error
+   responses. Clients can provide that value in support reports to locate the matching
+   server logs.
+5. Unexpected exceptions are logged with their stack trace and the same correlation ID,
+   but the response exposes only a stable generic error. Raw exception messages and
+   infrastructure details are not returned to clients.
+6. Future queue publication includes the correlation ID in the durable job. Workers bind
+   it to their own logging context, preserving the trace across API, queue, and processing
+   boundaries.
+
 ### Local registration and login
 
 1. Public registration creates a new tenant, its initial `General` department, and a
    `tenant_admin` in one database transaction. It never joins an existing tenant or
    accepts a caller-selected role.
-2. Passwords are hashed with Argon2 before persistence.
+2. Passwords are hashed with Argon2 before persistence. The initial administrator is
+   assigned to `General` through `user_departments`; later administration flows may assign
+   a user to multiple departments in the same tenant.
 3. Login performs a normalized email lookup and constant-work password verification,
    returning the same public failure for unknown emails and incorrect passwords.
 4. Successful login issues a short-lived signed JWT containing user, tenant,
@@ -55,17 +76,16 @@ The initial relational identity model is:
 ```text
 Tenant 1 --- * Department
 Tenant 1 --- * User
-Department 1 --- * User
+User * --- * Department (through user_departments)
 ```
 
-The database enforces that a user's department belongs to the same tenant. Document
-department membership remains the many-to-many model described in ADR 003 and will be
-added with document persistence.
+The database enforces that every user-department membership belongs to one tenant.
+Document department membership uses the separate many-to-many model described in ADR 003.
 
 ### Ingest and version replacement
 
 1. The UI submits a file to `POST /ingest`, optionally including a `document_id` for a replacement.
-2. The API validates identity, department/role permissions, file signature, and the 25 MiB maximum. A new document receives a department set: an editor is assigned their own department automatically, while a tenant admin selects one or more departments within their tenant.
+2. The API validates identity, department/role permissions, file signature, and the 25 MiB maximum. A new document receives a department set: an editor may select only departments they belong to, while a tenant admin may select any departments within their tenant.
 3. The API writes the original file synchronously to object storage. A replacement inherits the existing document's department set.
 4. The API creates a document version and durable queued job, then enqueues the job. It returns `202 Accepted` only after enqueueing succeeds.
 5. The worker processes the file and writes version-scoped chunks, entities, embeddings, and lexical-index entries.

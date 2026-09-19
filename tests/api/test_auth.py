@@ -1,6 +1,7 @@
 """Registration and login flow tests using an isolated relational database."""
 
 from collections.abc import AsyncIterator
+from uuid import UUID
 
 import jwt
 import pytest
@@ -16,6 +17,7 @@ from document_insight.infrastructure.database.base import Base
 from document_insight.infrastructure.database.models import (
     DepartmentModel,
     TenantModel,
+    UserDepartmentModel,
     UserModel,
 )
 from document_insight.infrastructure.database.session import get_db_session
@@ -85,12 +87,16 @@ async def test_register_provisions_tenant_department_and_hashed_admin(
         assert await session.scalar(select(func.count()).select_from(TenantModel)) == 1
         department = await session.scalar(select(DepartmentModel))
         user = await session.scalar(select(UserModel))
+        membership = await session.scalar(select(UserDepartmentModel))
 
     assert department is not None
     assert department.name == "General"
     assert user is not None
     assert user.tenant_id == department.tenant_id
-    assert user.department_id == department.id
+    assert membership is not None
+    assert membership.user_id == user.id
+    assert membership.department_id == department.id
+    assert body["department_ids"] == [str(department.id)]
     assert user.password_hash != REGISTER_PAYLOAD["password"]
     assert user.password_hash.startswith("$argon2")
 
@@ -100,9 +106,25 @@ async def test_login_returns_token_with_authorization_claims(
     auth_client: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
 ) -> None:
     """Valid credentials issue a signed token with tenant, department, and role claims."""
-    client, _ = auth_client
+    client, session_factory = auth_client
     registration = await client.post("/auth/register", json=REGISTER_PAYLOAD)
     registered_user = registration.json()
+    second_department_id: UUID
+    async with session_factory.begin() as session:
+        second_department = DepartmentModel(
+            tenant_id=UUID(registered_user["tenant_id"]),
+            name="Legal",
+        )
+        session.add(second_department)
+        await session.flush()
+        second_department_id = second_department.id
+        session.add(
+            UserDepartmentModel(
+                user_id=UUID(registered_user["user_id"]),
+                department_id=second_department_id,
+                tenant_id=UUID(registered_user["tenant_id"]),
+            )
+        )
 
     response = await client.post(
         "/auth/login",
@@ -125,7 +147,10 @@ async def test_login_returns_token_with_authorization_claims(
     )
     assert claims["sub"] == registered_user["user_id"]
     assert claims["tenant_id"] == registered_user["tenant_id"]
-    assert claims["department_ids"] == [registered_user["department_id"]]
+    assert set(claims["department_ids"]) == {
+        *registered_user["department_ids"],
+        str(second_department_id),
+    }
     assert claims["role"] == "tenant_admin"
     assert claims["type"] == "access"
 

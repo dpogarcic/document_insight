@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     jwt_issuer: str = "document-insight"
     jwt_audience: str = "document-insight-api"
     jwt_access_token_expire_minutes: int = Field(default=30, ge=1, le=1440)
+    s3_endpoint_url: str = "http://localhost:9000"
+    s3_access_key: SecretStr = SecretStr("document-insight")
+    s3_secret_key: SecretStr = SecretStr("document-insight-local-only")
+    s3_bucket_name: str = "document-insight-originals"
+    s3_region: str = "us-east-1"
+    upload_max_bytes: int = Field(default=25 * 1024 * 1024, ge=10 * 1024 * 1024)
 
 
 @lru_cache

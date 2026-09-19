@@ -3,16 +3,22 @@
 from fastapi import FastAPI
 
 from document_insight import __version__
+from document_insight.api.exception_handlers import register_exception_handlers
+from document_insight.api.logging_config import configure_server_logging
+from document_insight.api.middleware.correlation_id import CorrelationIdMiddleware
 from document_insight.api.routes import api_router
 
 
 def create_app() -> FastAPI:
     """Create the public API application without initializing infrastructure services."""
+    configure_server_logging()
     application = FastAPI(
         title="Document Insight API",
         summary="Secure document ingestion and evidence-grounded question answering.",
         version=__version__,
     )
+    register_exception_handlers(application)
+    application.add_middleware(CorrelationIdMiddleware)
     application.include_router(api_router)
     return application
 
