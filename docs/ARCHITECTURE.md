@@ -39,6 +39,29 @@ flowchart LR
 
 ## Data flow
 
+### Local registration and login
+
+1. Public registration creates a new tenant, its initial `General` department, and a
+   `tenant_admin` in one database transaction. It never joins an existing tenant or
+   accepts a caller-selected role.
+2. Passwords are hashed with Argon2 before persistence.
+3. Login performs a normalized email lookup and constant-work password verification,
+   returning the same public failure for unknown emails and incorrect passwords.
+4. Successful login issues a short-lived signed JWT containing user, tenant,
+   department, and role claims.
+
+The initial relational identity model is:
+
+```text
+Tenant 1 --- * Department
+Tenant 1 --- * User
+Department 1 --- * User
+```
+
+The database enforces that a user's department belongs to the same tenant. Document
+department membership remains the many-to-many model described in ADR 003 and will be
+added with document persistence.
+
 ### Ingest and version replacement
 
 1. The UI submits a file to `POST /ingest`, optionally including a `document_id` for a replacement.

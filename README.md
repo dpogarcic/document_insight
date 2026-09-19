@@ -5,11 +5,13 @@ content, and answering questions over authorized document evidence.
 
 ## Project status
 
-**Planning complete; implementation has not started.**
+**Planning complete; authentication and API implementation in progress.**
 
-The current documents define the first implementation slice. Setup commands, API
-examples, deployment instructions, and operational runbooks will be added alongside
-working code so that this README remains accurate.
+The FastAPI application, typed request/response models, endpoint validation, and OpenAPI
+contract are implemented. Local registration and login are connected to PostgreSQL with
+Argon2 password hashing and short-lived signed JWT access tokens. Ingestion, job status,
+query, queues, object storage, and model providers are not connected yet; those endpoint
+calls currently return `501 Not Implemented`.
 
 ## Planned capabilities
 
@@ -36,8 +38,52 @@ working code so that this README remains accurate.
   departments, roles, authorization, encryption, and auditing.
 - [Code quality standards](docs/CODE_QUALITY.md) - typing, testing, coverage,
   documentation, security, and merge expectations.
-- [AI Tech Lead assignment](Tech_Assignment.pdf) - original project
-  brief.
+- [AI Tech Lead assignment](Tech_Assignment.pdf) - original project brief.
+
+## Local setup
+
+Install dependencies and create local configuration:
+
+```bash
+uv sync --group dev
+cp .env.example .env
+```
+
+Start PostgreSQL with pgvector and apply migrations:
+
+```bash
+docker compose up -d database
+uv run alembic upgrade head
+```
+
+Start the API:
+
+```bash
+uv run uvicorn document_insight.api.app:app --reload
+```
+
+OpenAPI documentation is available at `http://127.0.0.1:8000/docs`.
+
+| Method | Path | Contract | Status |
+| --- | --- | --- | --- |
+| `POST` | `/auth/register` | Provision a new tenant, General department, and tenant administrator | Implemented |
+| `POST` | `/auth/login` | Verify credentials and obtain a bearer token | Implemented |
+| `POST` | `/ingest` | Upload a PDF/image and optionally version an existing document | Contract only |
+| `GET` | `/jobs/{job_id}` | Read processing-job status | Contract only |
+| `POST` | `/query` | Query authorized documents with optional filters and `top_k` | Contract only |
+
+Registration intentionally creates a new tenant. Joining an existing tenant will use a
+future administrator-controlled invitation flow; public registration cannot select an
+existing tenant or self-assign a role.
+
+Run the current checks with:
+
+```bash
+uv run ruff format --check src tests migrations
+uv run ruff check src tests migrations
+uv run mypy
+uv run pytest
+```
 
 ## First implementation scope
 

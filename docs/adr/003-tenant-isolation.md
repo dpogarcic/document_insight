@@ -16,7 +16,8 @@ We will use locally managed users and signed access tokens for the exercise. Eve
 
 ### Identity and authentication
 
-- Users register and log in through the local authentication endpoints. Passwords are stored only as strong salted hashes; plaintext passwords are never logged or stored.
+- Public registration provisions a new tenant, a `General` department, and its initial `tenant_admin`. It does not accept an existing tenant ID or caller-selected role. Adding users to an existing tenant is reserved for a future administrator-controlled invitation flow.
+- Users register and log in through the local authentication endpoints. Passwords are stored as salted Argon2 hashes; plaintext passwords are never logged or stored.
 - Login issues a short-lived signed bearer token. Token signing material is supplied by secret configuration, not committed to the repository.
 - A department is a tenant-scoped organizational access boundary, for example `legal`, `finance`, `human_resources`, or `customer_support`. Department names are configured per tenant; they are not global labels shared across tenants.
 - Every non-admin user has one department membership in the first release. A document can be assigned to multiple departments through a `document_departments` association; its versions, chunks, entities, and embeddings inherit that department set for authorization. A department can contain many documents, so this is a many-to-many relationship.
