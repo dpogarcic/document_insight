@@ -55,3 +55,13 @@ class S3OriginalObjectStorage(OriginalObjectStorage):
             )
         except (BotoCoreError, ClientError) as error:
             raise ObjectStorageUnavailableError from error
+
+    async def get(self, key: str) -> bytes:
+        """Read an original object's bytes without blocking the event loop."""
+        try:
+            response = await asyncio.to_thread(
+                self._client.get_object, Bucket=self._bucket_name, Key=key
+            )
+            return await asyncio.to_thread(response["Body"].read)
+        except (BotoCoreError, ClientError) as error:
+            raise ObjectStorageUnavailableError from error

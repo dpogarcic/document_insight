@@ -2,13 +2,18 @@
 
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from document_insight.application.ingestion.models import (
+    DocumentMediaType,
+    DocumentVersionStatus,
+)
 from document_insight.infrastructure.document_version.model import DocumentVersionModel
 from document_insight.infrastructure.document_version.protocol import (
     CreateDocumentVersion,
     DocumentVersionRepository,
+    ProcessingDocumentVersion,
 )
 
 
@@ -53,4 +58,39 @@ class SqlAlchemyDocumentVersionRepository(DocumentVersionRepository):
                 status=command.status.value,
                 created_by=command.created_by,
             )
+        )
+
+    async def get_for_processing(
+        self, version_id: UUID, tenant_id: UUID
+    ) -> ProcessingDocumentVersion | None:
+        """Load immutable source metadata for a worker job."""
+        version = await self._session.scalar(
+            select(DocumentVersionModel).where(
+                DocumentVersionModel.id == version_id,
+                DocumentVersionModel.tenant_id == tenant_id,
+            )
+        )
+        if version is None:
+            return None
+        return ProcessingDocumentVersion(
+            document_version_id=version.id,
+            tenant_id=version.tenant_id,
+            object_key=version.object_key,
+            media_type=DocumentMediaType(version.media_type),
+        )
+
+    async def mark_processing(self, version_id: UUID) -> None:
+        """Mirror job processing state on its immutable version."""
+        await self._session.execute(
+            update(DocumentVersionModel)
+            .where(DocumentVersionModel.id == version_id)
+            .values(status=DocumentVersionStatus.PROCESSING.value)
+        )
+
+    async def mark_failed(self, version_id: UUID) -> None:
+        """Mirror a terminal worker failure on its immutable version."""
+        await self._session.execute(
+            update(DocumentVersionModel)
+            .where(DocumentVersionModel.id == version_id)
+            .values(status=DocumentVersionStatus.FAILED.value)
         )

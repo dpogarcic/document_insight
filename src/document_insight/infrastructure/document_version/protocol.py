@@ -27,6 +27,16 @@ class CreateDocumentVersion:
     status: DocumentVersionStatus = DocumentVersionStatus.STORED
 
 
+@dataclass(frozen=True, slots=True)
+class ProcessingDocumentVersion:
+    """Stored source metadata required by the worker."""
+
+    document_version_id: UUID
+    tenant_id: UUID
+    object_key: str
+    media_type: DocumentMediaType
+
+
 class DocumentVersionRepository(Protocol):
     """Persistence operations owned by immutable document versions."""
 
@@ -38,3 +48,14 @@ class DocumentVersionRepository(Protocol):
 
     async def get_document_id(self, version_id: UUID, tenant_id: UUID) -> UUID | None:
         """Return the logical document owning a tenant-scoped version."""
+
+    async def get_for_processing(
+        self, version_id: UUID, tenant_id: UUID
+    ) -> ProcessingDocumentVersion | None:
+        """Return source metadata for a worker-owned version."""
+
+    async def mark_processing(self, version_id: UUID) -> None:
+        """Mark a version as processing after its job is claimed."""
+
+    async def mark_failed(self, version_id: UUID) -> None:
+        """Mark a version as terminally failed after a non-retryable error."""

@@ -9,7 +9,7 @@ from redis.exceptions import ConnectionError
 
 from document_insight.application.ingestion.exceptions import QueueUnavailableError
 from document_insight.infrastructure.queue.rq import RqProcessingQueue
-from document_insight.worker.ingestion import process_ingestion_job
+from document_insight.worker import ingestion
 
 
 @pytest.mark.anyio
@@ -43,12 +43,21 @@ async def test_rq_queue_translates_connection_failures() -> None:
         await processing_queue.enqueue_ingestion(uuid4(), uuid4())
 
 
-def test_worker_entry_point_only_traces_received_job(caplog: pytest.LogCaptureFixture) -> None:
-    """The initial callable does not process content or alter durable job state."""
+def test_worker_entry_point_runs_the_parsing_workflow(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker delegates processing under the queued correlation identifier."""
     job_id = uuid4()
     correlation_id = uuid4()
+    processed: list[object] = []
+
+    async def fake_process(value: object) -> None:
+        processed.append(value)
+
+    monkeypatch.setattr(ingestion, "_process", fake_process)
 
     with caplog.at_level(logging.INFO):
-        process_ingestion_job(str(job_id), str(correlation_id))
+        ingestion.process_ingestion_job(str(job_id), str(correlation_id))
 
-    assert "awaiting processing implementation" in caplog.text
+    assert processed == [job_id]
+    assert "parsing stage completed" in caplog.text

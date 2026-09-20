@@ -16,6 +16,17 @@ class JobStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class ProcessingStage(StrEnum):
+    """Ordered stages reserved for the version processing pipeline."""
+
+    PARSING = "parsing"
+    NER = "ner"
+    CHUNKING = "chunking"
+    EMBEDDING = "embedding"
+    INDEXING = "indexing"
+    READY = "ready"
+
+
 @dataclass(frozen=True, slots=True)
 class JobRecord:
     """Job data loaded from persistence without related document projections."""
@@ -28,6 +39,16 @@ class JobRecord:
     created_at: datetime
     updated_at: datetime
     error_code: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessingJob:
+    """Internal durable data used only by the processing worker."""
+
+    job_id: UUID
+    tenant_id: UUID
+    document_version_id: UUID
+    correlation_id: UUID
 
 
 @dataclass(frozen=True, slots=True)

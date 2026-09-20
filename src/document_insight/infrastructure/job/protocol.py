@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from document_insight.application.jobs.models import JobRecord
+from document_insight.application.jobs.models import JobRecord, ProcessingJob
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,3 +31,9 @@ class JobRepository(Protocol):
 
     async def mark_enqueued(self, job_id: UUID, enqueued_at: datetime) -> None:
         """Record successful queue publication for an existing durable job."""
+
+    async def claim(self, job_id: UUID, started_at: datetime) -> ProcessingJob | None:
+        """Claim a queued or retried processing job and return worker-only data."""
+
+    async def fail(self, job_id: UUID, error_code: str, finished_at: datetime) -> None:
+        """Persist a safe terminal processing failure."""

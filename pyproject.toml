@@ -17,6 +17,7 @@ dependencies = [
     "uvicorn>=0.34,<1",
     "redis>=6,<7",
     "rq>=2,<3",
+    "pypdf>=5,<7",
 ]
 
 [build-system]

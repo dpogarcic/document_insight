@@ -11,3 +11,6 @@ class OriginalObjectStorage(Protocol):
 
     async def delete(self, key: str) -> None:
         """Delete an object while compensating for a failed metadata write."""
+
+    async def get(self, key: str) -> bytes:
+        """Read an immutable original for asynchronous processing."""
