@@ -18,6 +18,9 @@ dependencies = [
     "redis>=6,<7",
     "rq>=2,<3",
     "pypdf>=5,<7",
+    "pillow>=11,<12",
+    "pymupdf>=1.26,<2",
+    "pytesseract>=0.3.13,<1",
 ]
 
 [build-system]

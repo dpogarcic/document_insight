@@ -29,6 +29,7 @@ class ProcessingService:
         extracted_documents: ExtractedDocumentRepository,
         object_storage: OriginalObjectStorage,
         pdf_parser: DocumentParser,
+        image_parser: DocumentParser,
         transactions: TransactionManager,
     ) -> None:
         self._jobs = jobs
@@ -36,6 +37,7 @@ class ProcessingService:
         self._extracted_documents = extracted_documents
         self._object_storage = object_storage
         self._pdf_parser = pdf_parser
+        self._image_parser = image_parser
         self._transactions = transactions
 
     async def process(self, job_id: UUID) -> None:
@@ -54,9 +56,18 @@ class ProcessingService:
         if version is None or completed:
             return
         try:
-            if version.media_type is not DocumentMediaType.PDF:
+            parser = (
+                self._pdf_parser
+                if version.media_type is DocumentMediaType.PDF
+                else self._image_parser
+            )
+            if version.media_type not in {
+                DocumentMediaType.PDF,
+                DocumentMediaType.PNG,
+                DocumentMediaType.JPEG,
+            }:
                 raise UnsupportedProcessingMediaTypeError
-            parsed = self._pdf_parser.parse(await self._object_storage.get(version.object_key))
+            parsed = parser.parse(await self._object_storage.get(version.object_key))
         except ParsingError:
             async with self._transactions.begin():
                 await self._jobs.fail(job.job_id, "document_parsing_failed", datetime.now(UTC))

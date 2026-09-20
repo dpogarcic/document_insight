@@ -2,6 +2,9 @@
 
 from io import BytesIO
 
+import fitz  # type: ignore[import-untyped]  # Third-party adapter lacks stubs.
+import pytesseract  # type: ignore[import-untyped]  # Third-party adapter lacks stubs.
+from PIL import Image
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
@@ -18,7 +21,16 @@ class PyPdfDocumentParser(DocumentParser):
         try:
             reader = PdfReader(BytesIO(content))
             pages = tuple(page.extract_text() or "" for page in reader.pages)
-        except (PdfReadError, ValueError) as error:
+            if not any(page.strip() for page in pages):
+                rendered = fitz.open(stream=content, filetype="pdf")
+                pages = tuple(
+                    pytesseract.image_to_string(
+                        Image.open(BytesIO(page.get_pixmap(dpi=200).tobytes("png")))
+                    )
+                    for page in rendered
+                )
+                rendered.close()
+        except (PdfReadError, ValueError, fitz.FileDataError, OSError) as error:
             raise ParsingError from error
         return ParsedDocument(
             text="\n\f\n".join(pages),

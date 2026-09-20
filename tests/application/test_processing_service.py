@@ -103,7 +103,13 @@ def service_for(
     parser = FakeParser(parser_error)
     return (
         ProcessingService(
-            jobs, versions, documents, FakeStorage(error=storage_error), parser, FakeTransactions()
+            jobs,
+            versions,
+            documents,
+            FakeStorage(error=storage_error),
+            pdf_parser=parser,
+            image_parser=parser,
+            transactions=FakeTransactions(),
         ),
         jobs,
         versions,

@@ -10,6 +10,7 @@ from document_insight.application.processing.service import ProcessingService
 from document_insight.config import get_settings
 from document_insight.infrastructure.database.session import get_session_factory
 from document_insight.infrastructure.database.transaction import SqlAlchemyTransactionManager
+from document_insight.infrastructure.document_parser.ocr import TesseractImageDocumentParser
 from document_insight.infrastructure.document_parser.pypdf import PyPdfDocumentParser
 from document_insight.infrastructure.document_version.repository import (
     SqlAlchemyDocumentVersionRepository,
@@ -50,5 +51,6 @@ async def _process(job_id: UUID) -> None:
             SqlAlchemyExtractedDocumentRepository(session),
             storage,
             PyPdfDocumentParser(),
+            TesseractImageDocumentParser(),
             SqlAlchemyTransactionManager(session),
         ).process(job_id)
