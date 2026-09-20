@@ -1,4 +1,6 @@
-"""SQLAlchemy declarative metadata."""
+"""Shared SQLAlchemy metadata and persistence defaults."""
+
+from datetime import UTC, datetime
 
 from sqlalchemy import MetaData
 from sqlalchemy.orm import DeclarativeBase
@@ -16,3 +18,8 @@ class Base(DeclarativeBase):
     """Base for all relational persistence models."""
 
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
+
+
+def utc_now() -> datetime:
+    """Return a timezone-aware UTC timestamp for ORM defaults."""
+    return datetime.now(UTC)

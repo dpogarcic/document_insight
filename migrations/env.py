@@ -9,7 +9,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from document_insight.config import get_settings
-from document_insight.infrastructure.database import models  # noqa: F401
+from document_insight.infrastructure.database import model_registry  # noqa: F401
 from document_insight.infrastructure.database.base import Base
 
 config = context.config

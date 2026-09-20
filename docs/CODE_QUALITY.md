@@ -16,15 +16,32 @@
 
 - Every function and method has parameter and return type annotations. Use `None` explicitly for procedures with no return value.
 - Public request, response, persistence, and event schemas use explicit typed models. Do not pass untyped dictionaries across application boundaries.
-- Use domain types, enums, and value objects for important concepts such as IDs, job states, document versions, roles, and provider configuration.
+- Use application types, enums, and value objects for important concepts such as IDs, job states, document versions, roles, and provider configuration.
 - Use `Protocol` interfaces for external capabilities, including object storage, queue delivery, OCR, embeddings, reranking, generation, and retrieval. Application services depend on those protocols, not vendor SDKs.
-- `Any`, `cast`, and `# type: ignore` require a narrow justification and must not mask application-domain errors.
-- Keep framework models and ORM entities at the transport/persistence edge. Convert them into domain/application models before business logic uses them.
+- `Any`, `cast`, and `# type: ignore` require a narrow justification and must not mask application errors.
+- Keep framework models and ORM entities at the transport/persistence edge. Convert them into application models before business logic uses them.
 
 ## Structure and readability
 
-- Keep HTTP routes thin: validate transport input, call one application service, and map expected domain errors to HTTP responses.
-- Separate API routes, application services, domain models, persistence adapters, and provider adapters. Avoid circular imports and cross-layer database access.
+- Keep HTTP routes thin: validate transport input, call one application service, and map expected application errors to HTTP responses.
+- Separate API routes, application services and models, persistence adapters, and provider adapters. Avoid circular imports and cross-layer database access.
+- Keep models with their owning application feature; do not introduce a separate `domain/`
+  layer in this project.
+- Use one repository per persisted entity or association. Coordinate cross-entity writes
+  in an application service under an explicit shared transaction; do not let one
+  repository mutate another repository's records.
+- Keep each repository protocol, implementation, and ORM model together under
+  `infrastructure/<entity>/`, with the concrete adapter explicitly implementing the local
+  protocol. Keep only shared database plumbing in `infrastructure/database/`.
+- Name SQLAlchemy persistence classes `<Entity>Model`. Name HTTP input schemas
+  `<Operation>Request`; name HTTP responses and their nested payload schemas
+  `<Concept>DTO`. Avoid redundant names such as `UserResponseDTO`; use `UserDTO`.
+- Split security capabilities under `infrastructure/security/`. Co-locate each capability
+  protocol with its explicitly implementing adapter instead of grouping unrelated token
+  and password behavior in one module.
+- Put application use-case inputs in focused `commands.py` modules. Put persistence
+  creation data beside the owning infrastructure protocol. Avoid generic `contracts.py`
+  modules that mix commands, persistence payloads, and infrastructure interfaces.
 - Prefer small, single-purpose functions. When a function needs several unrelated responsibilities, extract a named collaborator.
 - Prefer clear control flow over clever abstractions. Names must describe the business purpose rather than the implementation detail.
 - Avoid hidden side effects. File writes, database writes, queue publication, network calls, and time-dependent behavior must be visible in a function's dependencies or return contract.
@@ -39,7 +56,7 @@
 
 ## Errors, logging, and security
 
-- Raise and handle explicit domain errors. Do not catch broad `Exception` unless the boundary re-raises a safe, typed error and records the cause.
+- Raise and handle explicit application errors. Do not catch broad `Exception` unless the boundary re-raises a safe, typed error and records the cause.
 - API error responses are stable, actionable, and free of document content, credentials, infrastructure details, or stack traces.
 - Structured logs include correlation ID, safe resource IDs, operation, outcome, and latency where relevant. Never log raw document text, bearer tokens, passwords, API keys, or unredacted prompts.
 - Validate untrusted input at the boundary: file signature and size, request schemas, identifiers, filter values, and provider responses.

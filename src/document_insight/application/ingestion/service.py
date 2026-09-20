@@ -2,27 +2,39 @@
 
 from hashlib import sha256
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
-from document_insight.application.ingestion.contracts import (
-    DocumentRepository,
-    IngestDocumentCommand,
-    OriginalObjectStorage,
-    StoreDocumentVersion,
-)
+from document_insight.application.auth.models import AuthorizationContext, UserRole
+from document_insight.application.ingestion.commands import IngestDocumentCommand
 from document_insight.application.ingestion.exceptions import (
+    DocumentNotFoundError,
     DocumentTooLargeError,
     EmptyDocumentError,
     IngestionForbiddenError,
+    InvalidDepartmentScopeError,
     UnsupportedDocumentTypeError,
 )
-from document_insight.domain.auth import UserRole
-from document_insight.domain.ingestion import StoredDocumentVersion, StoredMediaType
+from document_insight.application.ingestion.models import (
+    DocumentMediaType,
+    IngestionResult,
+)
+from document_insight.infrastructure.database.transaction import TransactionManager
+from document_insight.infrastructure.department.protocol import DepartmentRepository
+from document_insight.infrastructure.document.protocol import DocumentRepository
+from document_insight.infrastructure.document_department.protocol import (
+    DocumentDepartmentRepository,
+)
+from document_insight.infrastructure.document_version.protocol import (
+    CreateDocumentVersion,
+    DocumentVersionRepository,
+)
+from document_insight.infrastructure.job.protocol import CreateJob, JobRepository
+from document_insight.infrastructure.object_storage.protocol import OriginalObjectStorage
 
 _SIGNATURES = {
-    StoredMediaType.PDF: (b"%PDF-", ".pdf"),
-    StoredMediaType.PNG: (b"\x89PNG\r\n\x1a\n", ".png"),
-    StoredMediaType.JPEG: (b"\xff\xd8\xff", ".jpg"),
+    DocumentMediaType.PDF: (b"%PDF-", ".pdf"),
+    DocumentMediaType.PNG: (b"\x89PNG\r\n\x1a\n", ".png"),
+    DocumentMediaType.JPEG: (b"\xff\xd8\xff", ".jpg"),
 }
 
 
@@ -31,15 +43,25 @@ class IngestionService:
 
     def __init__(
         self,
-        repository: DocumentRepository,
+        documents: DocumentRepository,
+        departments: DepartmentRepository,
+        document_departments: DocumentDepartmentRepository,
+        document_versions: DocumentVersionRepository,
+        jobs: JobRepository,
+        transactions: TransactionManager,
         object_storage: OriginalObjectStorage,
         max_upload_bytes: int,
     ) -> None:
-        self._repository = repository
+        self._documents = documents
+        self._departments = departments
+        self._document_departments = document_departments
+        self._document_versions = document_versions
+        self._jobs = jobs
+        self._transactions = transactions
         self._object_storage = object_storage
         self._max_upload_bytes = max_upload_bytes
 
-    async def ingest(self, command: IngestDocumentCommand) -> StoredDocumentVersion:
+    async def ingest(self, command: IngestDocumentCommand) -> IngestionResult:
         """Store an upload and persist its metadata, compensating on database failure."""
         if command.actor.role is UserRole.VIEWER:
             raise IngestionForbiddenError
@@ -52,42 +74,127 @@ class IngestionService:
             command.content,
             command.declared_content_type,
         )
-        effective_departments = await self._repository.validate_upload_target(
-            command.document_id,
-            command.department_ids,
-            command.actor,
-        )
+        async with self._transactions.begin():
+            effective_departments = await self._resolve_departments(command)
 
         document_id = command.document_id or uuid4()
         version_id = uuid4()
+        job_id = uuid4()
+        idempotency_key = uuid4()
         object_key = (
             f"tenants/{command.actor.tenant_id}/documents/{document_id}/"
             f"versions/{version_id}/original{suffix}"
         )
         await self._object_storage.put(object_key, command.content, media_type.value)
 
-        upload = StoreDocumentVersion(
-            document_id=document_id,
-            document_version_id=version_id,
-            filename=Path(command.filename).name or f"document{suffix}",
-            object_key=object_key,
-            media_type=media_type,
-            size_bytes=len(command.content),
-            content_sha256=sha256(command.content).hexdigest(),
-            requested_department_ids=command.department_ids,
-            actor=command.actor,
-            replaces_existing_document=command.document_id is not None,
-        )
+        original_filename = Path(command.filename).name or f"document{suffix}"
+        content_sha256 = sha256(command.content).hexdigest()
         try:
-            return await self._repository.create_stored_version(upload, effective_departments)
+            async with self._transactions.begin():
+                if command.document_id is None:
+                    await self._documents.create(
+                        document_id=document_id,
+                        tenant_id=command.actor.tenant_id,
+                        title=original_filename,
+                        created_by=command.actor.user_id,
+                    )
+                    await self._document_departments.add_many(
+                        document_id,
+                        command.actor.tenant_id,
+                        effective_departments,
+                    )
+                    version_number = 1
+                else:
+                    if not await self._documents.lock(document_id, command.actor.tenant_id):
+                        raise DocumentNotFoundError
+                    effective_departments = await self._authorize_existing_document(
+                        document_id,
+                        command.actor,
+                    )
+                    version_number = await self._document_versions.next_version_number(document_id)
+
+                await self._document_versions.create(
+                    CreateDocumentVersion(
+                        document_id=document_id,
+                        document_version_id=version_id,
+                        tenant_id=command.actor.tenant_id,
+                        version_number=version_number,
+                        original_filename=original_filename,
+                        object_key=object_key,
+                        media_type=media_type,
+                        size_bytes=len(command.content),
+                        content_sha256=content_sha256,
+                        created_by=command.actor.user_id,
+                    )
+                )
+                await self._jobs.create(
+                    CreateJob(
+                        job_id=job_id,
+                        tenant_id=command.actor.tenant_id,
+                        document_version_id=version_id,
+                        idempotency_key=idempotency_key,
+                        correlation_id=command.correlation_id,
+                        created_by=command.actor.user_id,
+                    )
+                )
+
+            return IngestionResult(
+                document_id=document_id,
+                document_version_id=version_id,
+                job_id=job_id,
+                version_number=version_number,
+                object_key=object_key,
+                media_type=media_type,
+                size_bytes=len(command.content),
+                content_sha256=content_sha256,
+            )
         except Exception:
             await self._object_storage.delete(object_key)
             raise
 
+    async def _resolve_departments(self, command: IngestDocumentCommand) -> tuple[UUID, ...]:
+        """Authorize the target and return its effective department assignments."""
+        if command.document_id is not None:
+            if not await self._documents.exists(command.document_id, command.actor.tenant_id):
+                raise DocumentNotFoundError
+            return await self._authorize_existing_document(command.document_id, command.actor)
+
+        if command.actor.role is UserRole.EDITOR:
+            effective_ids = command.department_ids or command.actor.department_ids
+            unique_ids = tuple(dict.fromkeys(effective_ids))
+            if not unique_ids or not set(unique_ids).issubset(command.actor.department_ids):
+                raise InvalidDepartmentScopeError
+            return unique_ids
+
+        effective_ids = command.department_ids or command.actor.department_ids
+        unique_ids = tuple(dict.fromkeys(effective_ids))
+        matched_ids = await self._departments.existing_ids(
+            command.actor.tenant_id,
+            unique_ids,
+        )
+        if matched_ids != set(unique_ids):
+            raise InvalidDepartmentScopeError
+        return unique_ids
+
+    async def _authorize_existing_document(
+        self,
+        document_id: UUID,
+        actor: AuthorizationContext,
+    ) -> tuple[UUID, ...]:
+        departments = await self._document_departments.list_department_ids(
+            document_id,
+            actor.tenant_id,
+        )
+        if actor.role is not UserRole.TENANT_ADMIN and not (
+            set(departments) & set(actor.department_ids)
+        ):
+            raise IngestionForbiddenError
+        return departments
+
     @staticmethod
     def _detect_media_type(
         content: bytes, declared_content_type: str | None
-    ) -> tuple[StoredMediaType, str]:
+    ) -> tuple[DocumentMediaType, str]:
         for media_type, (signature, suffix) in _SIGNATURES.items():
             if content.startswith(signature):
                 if declared_content_type not in {None, "", media_type.value}:

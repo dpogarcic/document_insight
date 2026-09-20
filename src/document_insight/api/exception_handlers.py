@@ -1,4 +1,4 @@
-"""Application-wide translation of expected domain errors into safe HTTP responses."""
+"""Application-wide translation of expected application errors into safe HTTP responses."""
 
 import logging
 
@@ -19,6 +19,7 @@ from document_insight.application.ingestion.exceptions import (
     ObjectStorageUnavailableError,
     UnsupportedDocumentTypeError,
 )
+from document_insight.application.jobs.exceptions import JobNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,14 @@ def register_exception_handlers(app: FastAPI) -> None:
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "object_storage_unavailable",
             "Document storage is unavailable.",
+        )
+
+    @app.exception_handler(JobNotFoundError)
+    async def handle_job_not_found(_: Request, __: Exception) -> JSONResponse:
+        return error_response(
+            status.HTTP_404_NOT_FOUND,
+            "job_not_found",
+            "The requested job was not found.",
         )
 
     @app.exception_handler(Exception)

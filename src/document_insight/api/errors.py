@@ -6,7 +6,7 @@ from fastapi import HTTPException, status
 from pydantic import BaseModel, ConfigDict
 
 
-class ErrorDetail(BaseModel):
+class ErrorDetailDTO(BaseModel):
     """Machine-readable API error details."""
 
     model_config = ConfigDict(extra="forbid")
@@ -15,12 +15,12 @@ class ErrorDetail(BaseModel):
     message: str
 
 
-class ErrorResponse(BaseModel):
+class ErrorDTO(BaseModel):
     """FastAPI error envelope."""
 
     model_config = ConfigDict(extra="forbid")
 
-    detail: ErrorDetail
+    detail: ErrorDetailDTO
 
 
 def raise_not_implemented(operation: str) -> NoReturn:
@@ -37,19 +37,30 @@ def raise_not_implemented(operation: str) -> NoReturn:
 # FastAPI models arbitrary OpenAPI metadata values with Any at this framework boundary.
 NOT_IMPLEMENTED_RESPONSE: dict[int | str, dict[str, Any]] = {
     status.HTTP_501_NOT_IMPLEMENTED: {
-        "model": ErrorResponse,
+        "model": ErrorDTO,
         "description": "The endpoint contract exists, but its application service is not implemented.",
     }
 }
 
 AUTH_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     status.HTTP_401_UNAUTHORIZED: {
-        "model": ErrorResponse,
+        "model": ErrorDTO,
         "description": "The supplied credentials are invalid.",
     },
     status.HTTP_409_CONFLICT: {
-        "model": ErrorResponse,
+        "model": ErrorDTO,
         "description": "The email address is already registered.",
+    },
+}
+
+JOB_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    status.HTTP_401_UNAUTHORIZED: {
+        "model": ErrorDTO,
+        "description": "A valid bearer access token is required.",
+    },
+    status.HTTP_404_NOT_FOUND: {
+        "model": ErrorDTO,
+        "description": "The job does not exist within the caller's authorization scope.",
     },
 }
 

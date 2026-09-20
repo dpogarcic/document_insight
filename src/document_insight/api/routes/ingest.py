@@ -3,30 +3,31 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
 
 from document_insight.api.dependencies import (
     ApplicationSettings,
     get_current_user,
     get_ingestion_service,
 )
-from document_insight.api.schemas.ingest import IngestStoredResponse
-from document_insight.application.ingestion.contracts import IngestDocumentCommand
+from document_insight.api.schemas.ingest import IngestStoredDTO
+from document_insight.application.auth.models import AuthorizationContext
+from document_insight.application.ingestion.commands import IngestDocumentCommand
 from document_insight.application.ingestion.service import IngestionService
-from document_insight.domain.auth import AuthenticatedUser
 
 router = APIRouter(tags=["documents"])
 IngestionServiceDependency = Annotated[IngestionService, Depends(get_ingestion_service)]
-CurrentUser = Annotated[AuthenticatedUser, Depends(get_current_user)]
+CurrentUser = Annotated[AuthorizationContext, Depends(get_current_user)]
 
 
 @router.post(
     "/ingest",
-    response_model=IngestStoredResponse,
+    response_model=IngestStoredDTO,
     status_code=status.HTTP_203_NON_AUTHORITATIVE_INFORMATION,
 )
 async def ingest_document(
     file: Annotated[UploadFile, File(description="PDF or image document, maximum 25 MiB")],
+    request: Request,
     current_user: CurrentUser,
     service: IngestionServiceDependency,
     settings: ApplicationSettings,
@@ -38,7 +39,7 @@ async def ingest_document(
         list[UUID] | None,
         Form(description="Initial departments selected by a tenant admin for a new document"),
     ] = None,
-) -> IngestStoredResponse:
+) -> IngestStoredDTO:
     """Validate and store an original; queue acceptance is implemented separately."""
     content = await file.read(settings.upload_max_bytes + 1)
     command = IngestDocumentCommand(
@@ -48,11 +49,13 @@ async def ingest_document(
         document_id=document_id,
         department_ids=tuple(department_ids or ()),
         actor=current_user,
+        correlation_id=UUID(request.state.correlation_id),
     )
     stored = await service.ingest(command)
 
-    return IngestStoredResponse(
+    return IngestStoredDTO(
         document_id=stored.document_id,
         document_version_id=stored.document_version_id,
+        job_id=stored.job_id,
         version_number=stored.version_number,
     )

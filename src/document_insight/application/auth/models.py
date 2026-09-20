@@ -1,4 +1,4 @@
-"""Authentication and membership domain types."""
+"""Authentication and authorization models used by the application layer."""
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -14,8 +14,8 @@ class UserRole(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class RegisteredUser:
-    """Public result of provisioning a user and tenant membership."""
+class RegistrationResult:
+    """Result of provisioning a tenant administrator and initial membership."""
 
     user_id: UUID
     tenant_id: UUID
@@ -26,8 +26,20 @@ class RegisteredUser:
 
 
 @dataclass(frozen=True, slots=True)
-class StoredUser(RegisteredUser):
-    """Authentication data loaded from persistence."""
+class UserRecord:
+    """User data loaded from persistence without department memberships."""
+
+    user_id: UUID
+    tenant_id: UUID
+    email: str
+    display_name: str
+    role: UserRole
+    password_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class UserCredentials(RegistrationResult):
+    """User data and password hash used only during local authentication."""
 
     password_hash: str
 
@@ -41,7 +53,7 @@ class AccessToken:
 
 
 @dataclass(frozen=True, slots=True)
-class AuthenticatedUser:
+class AuthorizationContext:
     """Trusted authorization claims extracted from a validated access token."""
 
     user_id: UUID

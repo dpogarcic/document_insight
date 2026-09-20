@@ -6,7 +6,7 @@ from uuid import UUID
 from pydantic import EmailStr, Field, StringConstraints
 
 from document_insight.api.schemas.common import ApiModel
-from document_insight.domain.auth import UserRole
+from document_insight.application.auth.models import UserRole
 
 Password = Annotated[str, StringConstraints(min_length=8, max_length=128)]
 
@@ -24,7 +24,7 @@ class RegisterRequest(ApiModel):
     ]
 
 
-class UserResponse(ApiModel):
+class UserDTO(ApiModel):
     """Public representation of a registered user."""
 
     user_id: UUID
@@ -42,7 +42,7 @@ class LoginRequest(ApiModel):
     password: Password
 
 
-class AccessTokenResponse(ApiModel):
+class AccessTokenDTO(ApiModel):
     """Short-lived bearer token returned after successful authentication."""
 
     access_token: str

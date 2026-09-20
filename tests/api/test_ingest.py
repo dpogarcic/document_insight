@@ -13,20 +13,19 @@ from sqlalchemy.pool import StaticPool
 
 from document_insight.api.app import create_app
 from document_insight.api.dependencies import get_object_storage
+from document_insight.application.auth.models import UserCredentials, UserRole
 from document_insight.config import Settings, get_settings
-from document_insight.domain.auth import StoredUser, UserRole
 from document_insight.infrastructure.database.base import Base
-from document_insight.infrastructure.database.models import (
-    DepartmentModel,
-    DocumentDepartmentModel,
-    DocumentModel,
-    DocumentVersionModel,
-    TenantModel,
-    UserDepartmentModel,
-    UserModel,
-)
 from document_insight.infrastructure.database.session import get_db_session
-from document_insight.infrastructure.security import JwtTokenIssuer
+from document_insight.infrastructure.department.model import DepartmentModel
+from document_insight.infrastructure.document.model import DocumentModel
+from document_insight.infrastructure.document_department.model import DocumentDepartmentModel
+from document_insight.infrastructure.document_version.model import DocumentVersionModel
+from document_insight.infrastructure.job.model import JobModel
+from document_insight.infrastructure.security.token_issuer import JwtTokenIssuer
+from document_insight.infrastructure.tenant.model import TenantModel
+from document_insight.infrastructure.user.model import UserModel
+from document_insight.infrastructure.user_department.model import UserDepartmentModel
 
 
 @dataclass
@@ -106,7 +105,7 @@ async def ingest_context() -> AsyncIterator[IngestContext]:
         audience=settings.jwt_audience,
         expire_minutes=settings.jwt_access_token_expire_minutes,
     ).issue(
-        StoredUser(
+        UserCredentials(
             user_id=user_id,
             tenant_id=tenant_id,
             department_ids=(department_id,),
@@ -183,7 +182,7 @@ async def create_user_token(
             expire_minutes=context.settings.jwt_access_token_expire_minutes,
         )
         .issue(
-            StoredUser(
+            UserCredentials(
                 user_id=user_id,
                 tenant_id=context.tenant_id,
                 department_ids=department_ids,
@@ -215,6 +214,7 @@ async def test_ingest_stores_original_and_document_metadata(
     assert response.status_code == 203
     body = response.json()
     assert body["status"] == "stored"
+    assert body["job_status"] == "queued"
     assert body["version_number"] == 1
     assert len(storage.objects) == 1
     object_key, stored_object = next(iter(storage.objects.items()))
@@ -224,12 +224,21 @@ async def test_ingest_stores_original_and_document_metadata(
     async with session_factory() as session:
         assert await session.scalar(select(func.count()).select_from(DocumentModel)) == 1
         version = await session.scalar(select(DocumentVersionModel))
+        job = await session.scalar(select(JobModel))
         assignment = await session.scalar(select(DocumentDepartmentModel))
 
     assert version is not None
     assert str(version.id) == body["document_version_id"]
     assert version.object_key == object_key
     assert version.status == "stored"
+    assert job is not None
+    assert str(job.id) == body["job_id"]
+    assert job.document_version_id == version.id
+    assert job.status == "queued"
+    assert job.attempt_count == 0
+    assert job.enqueued_at is None
+    assert str(job.correlation_id) == response.headers["x-correlation-id"]
+    assert job.idempotency_key != job.id
     assert assignment is not None
     assert str(assignment.document_id) == body["document_id"]
 
@@ -263,8 +272,11 @@ async def test_ingest_existing_document_creates_next_immutable_version(
                 select(DocumentVersionModel).order_by(DocumentVersionModel.version_number)
             )
         )
+        jobs = tuple(await session.scalars(select(JobModel).order_by(JobModel.created_at)))
     assert [version.version_number for version in versions] == [1, 2]
     assert versions[0].object_key != versions[1].object_key
+    assert len(jobs) == 2
+    assert {job.document_version_id for job in jobs} == {version.id for version in versions}
 
 
 @pytest.mark.anyio
@@ -383,3 +395,96 @@ async def test_viewer_cannot_ingest_documents(ingest_context: IngestContext) -> 
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "ingestion_forbidden"
     assert ingest_context.storage.objects == {}
+
+
+@pytest.mark.anyio
+async def test_get_job_returns_authoritative_pre_queue_state(
+    ingest_context: IngestContext,
+) -> None:
+    """An authorized caller can inspect the durable job created by ingestion."""
+    ingestion = await ingest_context.client.post(
+        "/ingest",
+        files={"file": ("contract.pdf", b"%PDF-1.7\n", "application/pdf")},
+    )
+
+    response = await ingest_context.client.get(f"/jobs/{ingestion.json()['job_id']}")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "job_id": ingestion.json()["job_id"],
+        "document_id": ingestion.json()["document_id"],
+        "document_version_id": ingestion.json()["document_version_id"],
+        "status": "queued",
+        "attempt_count": 0,
+        "created_at": response.json()["created_at"],
+        "updated_at": response.json()["updated_at"],
+        "error_code": None,
+    }
+
+
+@pytest.mark.anyio
+async def test_viewer_can_read_job_for_an_accessible_document(
+    ingest_context: IngestContext,
+) -> None:
+    """Viewers may inspect jobs for documents in one of their departments."""
+    ingestion = await ingest_context.client.post(
+        "/ingest",
+        files={"file": ("contract.pdf", b"%PDF-1.7\n", "application/pdf")},
+    )
+    viewer_token = await create_user_token(
+        ingest_context,
+        UserRole.VIEWER,
+        (ingest_context.general_department_id,),
+    )
+
+    response = await ingest_context.client.get(
+        f"/jobs/{ingestion.json()['job_id']}",
+        headers={"Authorization": f"Bearer {viewer_token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "queued"
+
+
+@pytest.mark.anyio
+async def test_get_job_hides_jobs_outside_department_scope(
+    ingest_context: IngestContext,
+) -> None:
+    """An inaccessible job is indistinguishable from an unknown identifier."""
+    ingestion = await ingest_context.client.post(
+        "/ingest",
+        files={"file": ("general.pdf", b"%PDF-1.7\n", "application/pdf")},
+    )
+    legal_viewer_token = await create_user_token(
+        ingest_context,
+        UserRole.VIEWER,
+        (ingest_context.legal_department_id,),
+    )
+
+    response = await ingest_context.client.get(
+        f"/jobs/{ingestion.json()['job_id']}",
+        headers={"Authorization": f"Bearer {legal_viewer_token}"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "job_not_found"
+
+
+@pytest.mark.anyio
+async def test_get_job_requires_authentication(ingest_context: IngestContext) -> None:
+    """Job state is never exposed without a valid bearer token."""
+    response = await ingest_context.client.get(
+        f"/jobs/{uuid4()}",
+        headers={"Authorization": ""},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "invalid_access_token"
+
+
+@pytest.mark.anyio
+async def test_authenticated_job_id_must_be_a_uuid(ingest_context: IngestContext) -> None:
+    """Authenticated malformed job identifiers fail transport validation."""
+    response = await ingest_context.client.get("/jobs/not-a-uuid")
+
+    assert response.status_code == 422

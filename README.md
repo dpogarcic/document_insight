@@ -11,8 +11,9 @@ The FastAPI application, typed request/response models, endpoint validation, and
 contract are implemented. Local registration and login are connected to PostgreSQL with
 Argon2 password hashing and short-lived signed JWT access tokens. Authenticated ingestion
 currently validates PDF, PNG, and JPEG uploads, stores immutable originals in local MinIO,
-and persists document/version metadata. Queueing, job status, query, and model providers
-are not connected yet.
+and atomically persists document/version metadata with a durable processing job. The
+authenticated job-status endpoint is implemented. RQ publication, workers, query, and
+model providers are not connected yet.
 
 ## Planned capabilities
 
@@ -75,18 +76,20 @@ tracebacks use the response ID, while work outside an HTTP request uses `-`.
 | --- | --- | --- | --- |
 | `POST` | `/auth/register` | Provision a new tenant, General department, and tenant administrator | Implemented |
 | `POST` | `/auth/login` | Verify credentials and obtain a bearer token | Implemented |
-| `POST` | `/ingest` | Store a PDF/image and optionally version an existing document | Storage stage implemented |
-| `GET` | `/jobs/{job_id}` | Read processing-job status | Contract only |
+| `POST` | `/ingest` | Store a PDF/image, create its version, and persist a processing job | Pre-queue stage implemented |
+| `GET` | `/jobs/{job_id}` | Read an authorized processing-job status | Implemented |
 | `POST` | `/query` | Query authorized documents with optional filters and `top_k` | Contract only |
 
 Registration intentionally creates a new tenant. Joining an existing tenant will use a
 future administrator-controlled invitation flow; public registration cannot select an
 existing tenant or self-assign a role.
 
-The current ingestion checkpoint returns `203` with `status: "stored"` after the original
-and its metadata are durable. It does not claim a processing job exists. The next queue
-slice will create the durable job, enqueue it, and replace this interim response with the
-planned `202 Accepted` response containing a job ID.
+The current ingestion checkpoint returns `203` with `status: "stored"`,
+`job_status: "queued"`, and the generated `job_id` after the original, version, and job
+are durable. At this stage `queued` means that PostgreSQL is authoritatively holding the
+job for future delivery; `enqueued_at` remains null because RQ publication is not yet
+implemented. The next queue slice will publish this same job, set `enqueued_at`, and
+replace the interim response with the planned `202 Accepted` response.
 
 Run the current checks with:
 

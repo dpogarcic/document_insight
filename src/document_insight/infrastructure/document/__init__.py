@@ -1,0 +1,1 @@
+"""Logical-document persistence adapter."""

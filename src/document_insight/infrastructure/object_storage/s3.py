@@ -8,9 +8,10 @@ from botocore.config import Config  # type: ignore[import-untyped]
 from botocore.exceptions import BotoCoreError, ClientError  # type: ignore[import-untyped]
 
 from document_insight.application.ingestion.exceptions import ObjectStorageUnavailableError
+from document_insight.infrastructure.object_storage.protocol import OriginalObjectStorage
 
 
-class S3OriginalObjectStorage:
+class S3OriginalObjectStorage(OriginalObjectStorage):
     """Store originals through the standard S3 API, including local MinIO."""
 
     def __init__(

@@ -9,20 +9,34 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from document_insight.api.errors import raise_api_error
+from document_insight.application.auth.models import AuthorizationContext
 from document_insight.application.auth.service import AuthService
 from document_insight.application.ingestion.service import IngestionService
+from document_insight.application.jobs.service import JobService
 from document_insight.config import Settings, get_settings
-from document_insight.domain.auth import AuthenticatedUser
-from document_insight.infrastructure.database.auth_repository import SqlAlchemyAuthRepository
-from document_insight.infrastructure.database.document_repository import (
-    SqlAlchemyDocumentRepository,
-)
 from document_insight.infrastructure.database.session import get_db_session
-from document_insight.infrastructure.object_storage import S3OriginalObjectStorage
-from document_insight.infrastructure.security import (
-    Argon2PasswordHasher,
-    JwtTokenAuthenticator,
-    JwtTokenIssuer,
+from document_insight.infrastructure.database.transaction import (
+    SqlAlchemyTransactionManager,
+)
+from document_insight.infrastructure.department.repository import (
+    SqlAlchemyDepartmentRepository,
+)
+from document_insight.infrastructure.document.repository import SqlAlchemyDocumentRepository
+from document_insight.infrastructure.document_department.repository import (
+    SqlAlchemyDocumentDepartmentRepository,
+)
+from document_insight.infrastructure.document_version.repository import (
+    SqlAlchemyDocumentVersionRepository,
+)
+from document_insight.infrastructure.job.repository import SqlAlchemyJobRepository
+from document_insight.infrastructure.object_storage.s3 import S3OriginalObjectStorage
+from document_insight.infrastructure.security.password_hasher import Argon2PasswordHasher
+from document_insight.infrastructure.security.token_authenticator import JwtTokenAuthenticator
+from document_insight.infrastructure.security.token_issuer import JwtTokenIssuer
+from document_insight.infrastructure.tenant.repository import SqlAlchemyTenantRepository
+from document_insight.infrastructure.user.repository import SqlAlchemyUserRepository
+from document_insight.infrastructure.user_department.repository import (
+    SqlAlchemyUserDepartmentRepository,
 )
 
 DatabaseSession = Annotated[AsyncSession, Depends(get_db_session)]
@@ -43,7 +57,6 @@ def get_auth_service(
     settings: ApplicationSettings,
 ) -> AuthService:
     """Compose the authentication service for one request."""
-    repository = SqlAlchemyAuthRepository(session)
     token_issuer = JwtTokenIssuer(
         secret_key=settings.jwt_secret_key,
         algorithm=settings.jwt_algorithm,
@@ -51,13 +64,21 @@ def get_auth_service(
         audience=settings.jwt_audience,
         expire_minutes=settings.jwt_access_token_expire_minutes,
     )
-    return AuthService(repository, get_password_hasher(), token_issuer)
+    return AuthService(
+        tenants=SqlAlchemyTenantRepository(session),
+        departments=SqlAlchemyDepartmentRepository(session),
+        users=SqlAlchemyUserRepository(session),
+        user_departments=SqlAlchemyUserDepartmentRepository(session),
+        transactions=SqlAlchemyTransactionManager(session),
+        password_hasher=get_password_hasher(),
+        token_issuer=token_issuer,
+    )
 
 
 def get_current_user(
     credentials: BearerCredentials,
     settings: ApplicationSettings,
-) -> AuthenticatedUser:
+) -> AuthorizationContext:
     """Authenticate a bearer token and return trusted authorization claims."""
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise_api_error(
@@ -104,7 +125,21 @@ def get_ingestion_service(
 ) -> IngestionService:
     """Compose the storage-stage ingestion workflow for one request."""
     return IngestionService(
-        repository=SqlAlchemyDocumentRepository(session),
+        documents=SqlAlchemyDocumentRepository(session),
+        departments=SqlAlchemyDepartmentRepository(session),
+        document_departments=SqlAlchemyDocumentDepartmentRepository(session),
+        document_versions=SqlAlchemyDocumentVersionRepository(session),
+        jobs=SqlAlchemyJobRepository(session),
+        transactions=SqlAlchemyTransactionManager(session),
         object_storage=object_storage,
         max_upload_bytes=settings.upload_max_bytes,
+    )
+
+
+def get_job_service(session: DatabaseSession) -> JobService:
+    """Compose the authorized processing-job query service for one request."""
+    return JobService(
+        jobs=SqlAlchemyJobRepository(session),
+        document_versions=SqlAlchemyDocumentVersionRepository(session),
+        document_departments=SqlAlchemyDocumentDepartmentRepository(session),
     )
