@@ -42,6 +42,23 @@ Do not add optional stretch features unless the user explicitly requests them.
   delivers jobs.
 - Keep routes thin. Put business logic in application services and infrastructure/vendor
   calls behind adapters.
+- Keep application models with their owning feature under `application/<feature>/`. Do
+  not create a separate `domain/` layer for this modular monolith.
+- Use one repository per persisted entity or association. Application services coordinate
+  cross-entity work through an explicit shared transaction boundary; a repository must
+  not read or mutate another repository's entity as a convenience side effect.
+- Co-locate each repository protocol, SQLAlchemy implementation, and ORM model under
+  `infrastructure/<entity>/`. The concrete repository explicitly implements its local
+  protocol. Reserve `infrastructure/database/` for shared metadata, model registration,
+  connections, sessions, and transaction management.
+- Name SQLAlchemy classes `<Entity>Model`, HTTP request schemas `<Operation>Request`, and
+  HTTP response or nested response schemas `<Concept>DTO`. Do not add `Response` before
+  the `DTO` suffix.
+- Keep security capabilities separated under `infrastructure/security/`; each capability
+  module owns its protocol and explicitly implementing adapter.
+- Keep application use-case inputs in focused `commands.py` modules. Keep persistence
+  creation data beside its owning infrastructure protocol; do not mix commands,
+  persistence payloads, and infrastructure protocols in a generic `contracts.py`.
 - Provider selection is explicit by capability, such as `EMBEDDING_PROVIDER` or
   `GENERATION_PROVIDER`. A URL or model name alone must not be used to infer a provider
   protocol.
@@ -54,6 +71,9 @@ Do not add optional stretch features unless the user explicitly requests them.
   explicitly approved. PostgreSQL full-text search may be used temporarily, but do not
   call it BM25.
 - NER enriches metadata; it is not a retrieval algorithm.
+- NER stores deduplicated document-version metadata, unique by label and normalized value,
+  with an occurrence count. It may softly select or boost authorized documents before chunk
+  retrieval; it must not select chunks or provide citations. Chunks own passage grounding.
 - `confidence` is evidence confidence, not an LLM self-reported confidence. Do not
   expose uncalibrated model certainty as a factual score.
 
@@ -101,7 +121,7 @@ Do not add optional stretch features unless the user explicitly requests them.
 
 - Follow `docs/CODE_QUALITY.md` for typing, layering, documentation, errors, tests,
   coverage, and merge criteria.
-- Use typed request/response/event models and explicit domain errors. Do not pass
+- Use typed request/response/event models and explicit application errors. Do not pass
   untyped dictionaries across component boundaries.
 - Add tests with every behavior change. Maintain at least 70% branch coverage in `src/`.
 - Keep unit tests isolated; integration tests use the real Docker services; maintain an

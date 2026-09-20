@@ -69,9 +69,9 @@ We will build a Python application with logical service boundaries. FastAPI will
 - Unexpected exceptions retain their traceback in server logs under the same correlation
   ID, while the HTTP response contains only a stable generic error and never the raw
   exception message.
-- When queue processing is added, the API must persist and publish the correlation ID with
-  the job. The worker must bind it to its logging context so ingestion can be traced across
-  the HTTP and asynchronous-processing boundaries.
+- The API persists the originating correlation ID with the durable job. When queue
+  processing is added, it must publish the same ID, and the worker must bind it to its
+  logging context so ingestion can be traced across HTTP and asynchronous boundaries.
 
 ### Retrieval and AI providers
 
@@ -81,9 +81,28 @@ We will build a Python application with logical service boundaries. FastAPI will
 - Provider choices are independent. The first supported configuration will use a local BGE embedding provider and a Mistral generation API; additional local or remote adapters can be added without changing application services.
 - Retrieval is hybrid: the lexical and vector branches receive the same authorization filters, their oversampled candidates are fused with Reciprocal Rank Fusion (RRF), and a reranker orders the final candidates before applying `top_k`.
 - The intended lexical implementation is a PostgreSQL extension/service that provides true BM25 alongside pgvector. `pg_search` is the leading candidate because it provides BM25 and integrates with pgvector; its deployment and AGPL licensing must be confirmed before adoption. PostgreSQL full-text search is an acceptable temporary lexical fallback, but it must not be described as BM25.
-- NER is metadata enrichment, not lexical search. It extracts structured entities such as people, organizations, locations, dates, amounts, and domain identifiers from extracted text.
+- NER is metadata enrichment, not lexical search. It extracts structured people,
+  organizations, geopolitical entities, locations, products, events, and dates from
+  extracted text.
 - `confidence` is an evidence-confidence score in the range `0.0` to `1.0`, not an LLM self-assessment. It is derived from a calibrated reranker/retrieval score for the cited evidence, with an explicit insufficient-evidence threshold. The score must be calibrated and evaluated on a labelled test set before it is presented as probabilistic confidence.
-- Provider adapters translate implementation-specific errors into domain errors such as unavailable, rate-limited, invalid request, or retryable failure. Prompts, model names, reranker version, index generation, and retrieval configuration are versioned with evaluation runs.
+- Provider adapters translate implementation-specific errors into application errors such as unavailable, rate-limited, invalid request, or retryable failure. Prompts, model names, reranker version, index generation, and retrieval configuration are versioned with evaluation runs.
+
+### Entity metadata and document selection
+
+- NER enriches document selection only. It may identify or softly boost relevant authorized
+  document versions before chunk retrieval; it must not select passages, produce citations,
+  or replace lexical retrieval, vector retrieval, RRF, or reranking.
+- An entity is a canonical document-version fact, not an occurrence record. Persist one row
+  for each unique `(document_version_id, label, normalized_value)` combination. Repeated
+  mentions increase `occurrence_count` on that row rather than creating duplicate rows.
+- Canonical entity records retain a display value, canonical label, normalized value,
+  occurrence count, detected language, and NER provider/model provenance. Source character
+  offsets are deliberately not persisted: chunks and their citations provide passage-level
+  grounding.
+- Query-time entity extraction may add eligible document versions to the candidate set or
+  apply a modest document-level boost. It is a recall aid, never a mandatory filter, because
+  NER can miss entities or classify them incorrectly. Tenant and department authorization
+  filters apply before entity matching just as they do before lexical and vector retrieval.
 
 ## Acceptance criteria
 

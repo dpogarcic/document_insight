@@ -11,9 +11,9 @@ The FastAPI application, typed request/response models, endpoint validation, and
 contract are implemented. Local registration and login are connected to PostgreSQL with
 Argon2 password hashing and short-lived signed JWT access tokens. Authenticated ingestion
 currently validates PDF, PNG, and JPEG uploads, stores immutable originals in local MinIO,
-and atomically persists document/version metadata with a durable processing job. The
-authenticated job-status endpoint is implemented. RQ publication, workers, query, and
-model providers are not connected yet.
+and atomically persists document/version metadata with a durable processing job. The job
+is published to Redis/RQ, while its worker entry point is deliberately a no-op scaffold;
+OCR, indexing, query, and model providers are not connected yet.
 
 ## Planned capabilities
 
@@ -51,11 +51,12 @@ uv sync --group dev
 cp .env.example .env
 ```
 
-Start PostgreSQL, pgvector, and the local S3-compatible object store, then apply migrations:
+Start PostgreSQL, pgvector, Redis, and the local S3-compatible object store, then apply migrations:
 
 ```bash
-docker compose up -d database object-storage object-storage-init
+docker compose up -d database redis object-storage object-storage-init
 uv run alembic upgrade head
+docker compose up -d worker
 ```
 
 Start the API:
@@ -76,7 +77,7 @@ tracebacks use the response ID, while work outside an HTTP request uses `-`.
 | --- | --- | --- | --- |
 | `POST` | `/auth/register` | Provision a new tenant, General department, and tenant administrator | Implemented |
 | `POST` | `/auth/login` | Verify credentials and obtain a bearer token | Implemented |
-| `POST` | `/ingest` | Store a PDF/image, create its version, and persist a processing job | Pre-queue stage implemented |
+| `POST` | `/ingest` | Store a PDF/image, create its version, and enqueue a processing job | Implemented through queue publication |
 | `GET` | `/jobs/{job_id}` | Read an authorized processing-job status | Implemented |
 | `POST` | `/query` | Query authorized documents with optional filters and `top_k` | Contract only |
 
@@ -84,12 +85,27 @@ Registration intentionally creates a new tenant. Joining an existing tenant will
 future administrator-controlled invitation flow; public registration cannot select an
 existing tenant or self-assign a role.
 
-The current ingestion checkpoint returns `203` with `status: "stored"`,
-`job_status: "queued"`, and the generated `job_id` after the original, version, and job
-are durable. At this stage `queued` means that PostgreSQL is authoritatively holding the
-job for future delivery; `enqueued_at` remains null because RQ publication is not yet
-implemented. The next queue slice will publish this same job, set `enqueued_at`, and
-replace the interim response with the planned `202 Accepted` response.
+`POST /ingest` returns `202` with `status: "stored"`, `job_status: "queued"`, and the
+generated `job_id` only after the original and durable records are stored and RQ accepts
+the job. PostgreSQL remains authoritative for lifecycle state; `enqueued_at` records
+successful queue publication. The worker parses PDFs and images into a durable,
+version-scoped extraction checkpoint, detects English or Croatian, and persists spaCy
+entity metadata. Chunking, embedding, indexing, and ready promotion remain deferred.
+
+The worker image includes and uses local spaCy NER models for English (`en_core_web_sm`)
+and Croatian (`hr_core_news_sm`). The entity model holds deduplicated,
+document-version-scoped metadata: a display value, normalized value, label, occurrence
+count, and model provenance. Only RAG-relevant labels are retained: `PERSON`, `ORG`,
+`GPE`, `LOC`, `PRODUCT`, `EVENT`, and `DATE`. The Croatian model's `PER` label is
+normalized to the canonical `PERSON` label; broad or numeric labels such as `MISC` and
+`CARDINAL` are discarded. Chunks, rather than entities, retain the grounding used for
+passage retrieval and citations.
+
+The Compose `worker` service consumes the `ingestion` RQ queue. Follow its output with:
+
+```bash
+docker compose logs -f worker
+```
 
 Run the current checks with:
 

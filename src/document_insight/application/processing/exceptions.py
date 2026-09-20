@@ -7,3 +7,7 @@ class ParsingError(Exception):
 
 class UnsupportedProcessingMediaTypeError(ParsingError):
     """No parser is configured for the stored media type."""
+
+
+class NerError(Exception):
+    """The configured NER provider could not safely process extracted text."""

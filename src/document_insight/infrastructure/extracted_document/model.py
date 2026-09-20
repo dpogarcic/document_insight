@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKeyConstraint, Integer, Text, Uuid
+from sqlalchemy import DateTime, ForeignKeyConstraint, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from document_insight.infrastructure.database.base import Base, utc_now
@@ -27,6 +27,12 @@ class ExtractedDocumentModel(Base):
     page_count: Mapped[int] = mapped_column(Integer, nullable=False)
     parser_name: Mapped[str] = mapped_column(Text, nullable=False)
     parser_version: Mapped[str] = mapped_column(Text, nullable=False)
+    detected_language: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    ner_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ner_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ner_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )

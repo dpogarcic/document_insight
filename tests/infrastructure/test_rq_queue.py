@@ -60,4 +60,4 @@ def test_worker_entry_point_runs_the_parsing_workflow(
         ingestion.process_ingestion_job(str(job_id), str(correlation_id))
 
     assert processed == [job_id]
-    assert "parsing stage completed" in caplog.text
+    assert "NER stage completed" in caplog.text

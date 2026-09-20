@@ -56,7 +56,7 @@ services:
   worker:
     build: .
     command: >
-      uv run rq worker --url redis://redis:6379/0 ingestion
+      uv run --no-sync rq worker --url redis://redis:6379/0 ingestion
     environment:
       DATABASE_URL: postgresql+asyncpg://document_insight:document_insight@database:5432/document_insight
       REDIS_URL: redis://redis:6379/0
@@ -66,6 +66,9 @@ services:
       S3_BUCKET_NAME: document-insight-originals
       S3_REGION: us-east-1
       JWT_SECRET_KEY: replace-with-a-long-random-development-secret
+      NER_PROVIDER: spacy
+      NER_EN_MODEL: en_core_web_sm
+      NER_HR_MODEL: hr_core_news_sm
     depends_on:
       database:
         condition: service_healthy

@@ -54,9 +54,9 @@ flowchart LR
 5. Unexpected exceptions are logged with their stack trace and the same correlation ID,
    but the response exposes only a stable generic error. Raw exception messages and
    infrastructure details are not returned to clients.
-6. Future queue publication includes the correlation ID in the durable job. Workers bind
-   it to their own logging context, preserving the trace across API, queue, and processing
-   boundaries.
+6. Job creation persists the correlation ID on the durable processing job. Future queue
+   publication carries that ID to workers, which bind it to their logging context and
+   preserve the trace across API, queue, and processing boundaries.
 
 ### Local registration and login
 
@@ -88,15 +88,41 @@ Document department membership uses the separate many-to-many model described in
 2. The API validates identity, department/role permissions, file signature, and the 25 MiB maximum. A new document receives a department set: an editor may select only departments they belong to, while a tenant admin may select any departments within their tenant.
 3. The API writes the original file synchronously to object storage. A replacement inherits the existing document's department set.
 4. The API creates a document version and durable queued job, then enqueues the job. It returns `202 Accepted` only after enqueueing succeeds.
-5. The worker processes the file and writes version-scoped chunks, entities, embeddings, and lexical-index entries.
+5. The worker parses/OCRs the file, detects English or Croatian, and writes version-scoped
+   canonical entity metadata through durable idempotent checkpoints. Only canonical
+   RAG-relevant entity labels (`PERSON`, `ORG`, `GPE`, `LOC`, `PRODUCT`, `EVENT`, and
+   `DATE`) are retained; repeated mentions increment a document-version-level occurrence
+   count instead of creating duplicate rows. Later stages write chunks, embeddings, and
+   lexical-index entries.
 6. When processing succeeds, the worker promotes that version atomically only if it is newer than the document's current ready version. Until then, the prior ready version remains searchable.
+
+### Job status
+
+1. `GET /jobs/{job_id}` authenticates the caller and applies tenant and current document
+   department scope before returning job state.
+2. Tenant administrators can inspect every job in their tenant. Editors and viewers can
+   inspect a job only when the job's document intersects their department memberships.
+3. Missing and unauthorized identifiers both return the same `404` response to avoid
+   disclosing cross-tenant or cross-department job existence.
+4. PostgreSQL is authoritative for status, attempt count, safe error code, lifecycle
+   timestamps, server-generated idempotency key, and originating correlation ID. Queue
+   metadata will never replace the database status contract.
 
 ### Query
 
 1. The API authenticates the caller and derives the tenant, department, and role authorization scope.
-2. It applies that scope before both lexical and vector retrieval.
-3. It fuses candidates with RRF, reranks them, then sends only selected authorized passages to the configured generation provider.
-4. The response includes the answer, evidence-confidence score, detected entities, and citations to the exact document version and passage.
+2. It applies that scope before entity matching, lexical retrieval, and vector retrieval.
+3. Query entities may add a document-level candidate or modest document-level boost. They do not select chunks or citations and are never a mandatory retrieval filter.
+4. It fuses lexical and vector chunk candidates with RRF, reranks them, then sends only selected authorized passages to the configured generation provider.
+5. The response includes the answer, evidence-confidence score, detected entities, and citations to the exact document version and passage.
+
+### Entity metadata
+
+Entities are document-version-scoped metadata for document selection, not chunk-level
+retrieval records. A row is unique by `(document_version_id, label, normalized_value)` and
+contains a display value, canonical label, normalized value, occurrence count, detected
+language, and NER provider/model provenance. Character offsets are intentionally omitted:
+the chunk index is the source of passage-level retrieval and exact citations.
 
 ## Deployment position
 
