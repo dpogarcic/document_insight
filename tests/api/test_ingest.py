@@ -12,8 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from document_insight.api.app import create_app
-from document_insight.api.dependencies import get_object_storage
+from document_insight.api.dependencies import get_object_storage, get_processing_queue
 from document_insight.application.auth.models import UserCredentials, UserRole
+from document_insight.application.ingestion.exceptions import QueueUnavailableError
 from document_insight.config import Settings, get_settings
 from document_insight.infrastructure.database.base import Base
 from document_insight.infrastructure.database.session import get_db_session
@@ -41,6 +42,19 @@ class FakeObjectStorage:
         self.objects.pop(key, None)
 
 
+@dataclass
+class FakeProcessingQueue:
+    """Capture queue publication without requiring Redis in API tests."""
+
+    published: list[tuple[UUID, UUID]] = field(default_factory=list)
+    unavailable: bool = False
+
+    async def enqueue_ingestion(self, job_id: UUID, correlation_id: UUID) -> None:
+        if self.unavailable:
+            raise QueueUnavailableError
+        self.published.append((job_id, correlation_id))
+
+
 @dataclass(frozen=True)
 class IngestContext:
     """Resources and tenant identifiers used by ingestion authorization tests."""
@@ -48,6 +62,7 @@ class IngestContext:
     client: AsyncClient
     session_factory: async_sessionmaker[AsyncSession]
     storage: FakeObjectStorage
+    processing_queue: FakeProcessingQueue
     settings: Settings
     tenant_id: UUID
     general_department_id: UUID
@@ -116,6 +131,7 @@ async def ingest_context() -> AsyncIterator[IngestContext]:
         )
     )
     storage = FakeObjectStorage()
+    processing_queue = FakeProcessingQueue()
     application = create_app()
 
     async def override_db_session() -> AsyncIterator[AsyncSession]:
@@ -125,6 +141,7 @@ async def ingest_context() -> AsyncIterator[IngestContext]:
     application.dependency_overrides[get_db_session] = override_db_session
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_object_storage] = lambda: storage
+    application.dependency_overrides[get_processing_queue] = lambda: processing_queue
 
     transport = ASGITransport(app=application)
     headers = {"Authorization": f"Bearer {token.value}"}
@@ -137,6 +154,7 @@ async def ingest_context() -> AsyncIterator[IngestContext]:
             client=client,
             session_factory=session_factory,
             storage=storage,
+            processing_queue=processing_queue,
             settings=settings,
             tenant_id=tenant_id,
             general_department_id=department_id,
@@ -200,7 +218,7 @@ async def create_user_token(
 async def test_ingest_stores_original_and_document_metadata(
     ingest_context: IngestContext,
 ) -> None:
-    """A valid authenticated PDF is stored as version one and returns the interim 203."""
+    """A valid authenticated PDF is stored and queued as version one."""
     client = ingest_context.client
     session_factory = ingest_context.session_factory
     storage = ingest_context.storage
@@ -211,7 +229,7 @@ async def test_ingest_stores_original_and_document_metadata(
         files={"file": ("contract.pdf", content, "application/pdf")},
     )
 
-    assert response.status_code == 203
+    assert response.status_code == 202
     body = response.json()
     assert body["status"] == "stored"
     assert body["job_status"] == "queued"
@@ -236,9 +254,12 @@ async def test_ingest_stores_original_and_document_metadata(
     assert job.document_version_id == version.id
     assert job.status == "queued"
     assert job.attempt_count == 0
-    assert job.enqueued_at is None
+    assert job.enqueued_at is not None
     assert str(job.correlation_id) == response.headers["x-correlation-id"]
     assert job.idempotency_key != job.id
+    assert ingest_context.processing_queue.published == [
+        (UUID(body["job_id"]), UUID(response.headers["x-correlation-id"]))
+    ]
     assert assignment is not None
     assert str(assignment.document_id) == body["document_id"]
 
@@ -262,7 +283,7 @@ async def test_ingest_existing_document_creates_next_immutable_version(
         files={"file": ("contract.pdf", b"%PDF-1.7\nv2", "application/pdf")},
     )
 
-    assert second.status_code == 203
+    assert second.status_code == 202
     assert second.json()["document_id"] == first.json()["document_id"]
     assert second.json()["version_number"] == 2
     assert len(storage.objects) == 2
@@ -327,7 +348,7 @@ async def test_tenant_admin_can_create_document_in_any_tenant_department(
         files={"file": ("legal.pdf", b"%PDF-1.7\nlegal", "application/pdf")},
     )
 
-    assert response.status_code == 203
+    assert response.status_code == 202
     async with ingest_context.session_factory() as session:
         assignment = await session.scalar(
             select(DocumentDepartmentModel).where(
@@ -371,7 +392,7 @@ async def test_editor_can_select_subset_of_own_departments_only(
         files={"file": ("finance.pdf", b"%PDF-1.7\nfinance", "application/pdf")},
     )
 
-    assert permitted.status_code == 203
+    assert permitted.status_code == 202
     assert forbidden.status_code == 403
     assert forbidden.json()["detail"]["code"] == "ingestion_forbidden"
     assert len(ingest_context.storage.objects) == 1
@@ -395,6 +416,27 @@ async def test_viewer_cannot_ingest_documents(ingest_context: IngestContext) -> 
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "ingestion_forbidden"
     assert ingest_context.storage.objects == {}
+
+
+@pytest.mark.anyio
+async def test_ingest_keeps_durable_job_when_queue_is_unavailable(
+    ingest_context: IngestContext,
+) -> None:
+    """A queue outage returns a safe retryable error without losing the durable job."""
+    ingest_context.processing_queue.unavailable = True
+
+    response = await ingest_context.client.post(
+        "/ingest",
+        files={"file": ("contract.pdf", b"%PDF-1.7\n", "application/pdf")},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "queue_unavailable"
+    assert len(ingest_context.storage.objects) == 1
+    async with ingest_context.session_factory() as session:
+        job = await session.scalar(select(JobModel))
+    assert job is not None
+    assert job.enqueued_at is None
 
 
 @pytest.mark.anyio

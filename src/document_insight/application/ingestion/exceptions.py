@@ -31,3 +31,7 @@ class InvalidDepartmentScopeError(IngestionError):
 
 class ObjectStorageUnavailableError(IngestionError):
     """The original could not be durably written to object storage."""
+
+
+class QueueUnavailableError(IngestionError):
+    """The durable job could not be delivered to the processing queue."""

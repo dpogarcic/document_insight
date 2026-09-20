@@ -43,6 +43,16 @@ services:
       mc mb --ignore-existing local/document-insight-originals;
       "
 
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   postgres-data:
   object-storage-data:

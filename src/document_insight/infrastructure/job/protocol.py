@@ -1,6 +1,7 @@
 """Processing-job repository protocol and creation command."""
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -27,3 +28,6 @@ class JobRepository(Protocol):
 
     async def get(self, job_id: UUID, tenant_id: UUID) -> JobRecord | None:
         """Return one tenant-scoped job without loading related entities."""
+
+    async def mark_enqueued(self, job_id: UUID, enqueued_at: datetime) -> None:
+        """Record successful queue publication for an existing durable job."""

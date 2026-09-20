@@ -30,6 +30,7 @@ from document_insight.infrastructure.document_version.repository import (
 )
 from document_insight.infrastructure.job.repository import SqlAlchemyJobRepository
 from document_insight.infrastructure.object_storage.s3 import S3OriginalObjectStorage
+from document_insight.infrastructure.queue.rq import RqProcessingQueue
 from document_insight.infrastructure.security.password_hasher import Argon2PasswordHasher
 from document_insight.infrastructure.security.token_authenticator import JwtTokenAuthenticator
 from document_insight.infrastructure.security.token_issuer import JwtTokenIssuer
@@ -118,10 +119,22 @@ def get_object_storage(settings: ApplicationSettings) -> S3OriginalObjectStorage
 ObjectStorage = Annotated[S3OriginalObjectStorage, Depends(get_object_storage)]
 
 
+def get_processing_queue(settings: ApplicationSettings) -> RqProcessingQueue:
+    """Create the RQ adapter for publishing durable ingestion jobs."""
+    return RqProcessingQueue(
+        redis_url=settings.redis_url,
+        queue_name=settings.rq_ingestion_queue_name,
+    )
+
+
+ProcessingQueue = Annotated[RqProcessingQueue, Depends(get_processing_queue)]
+
+
 def get_ingestion_service(
     session: DatabaseSession,
     settings: ApplicationSettings,
     object_storage: ObjectStorage,
+    processing_queue: ProcessingQueue,
 ) -> IngestionService:
     """Compose the storage-stage ingestion workflow for one request."""
     return IngestionService(
@@ -132,6 +145,7 @@ def get_ingestion_service(
         jobs=SqlAlchemyJobRepository(session),
         transactions=SqlAlchemyTransactionManager(session),
         object_storage=object_storage,
+        processing_queue=processing_queue,
         max_upload_bytes=settings.upload_max_bytes,
     )
 

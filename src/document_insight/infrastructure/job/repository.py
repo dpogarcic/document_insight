@@ -1,8 +1,9 @@
 """SQLAlchemy adapter for authorized processing-job status reads."""
 
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from document_insight.application.jobs.models import JobRecord, JobStatus
@@ -50,4 +51,10 @@ class SqlAlchemyJobRepository(JobRepository):
             created_at=job.created_at,
             updated_at=job.updated_at,
             error_code=job.error_code,
+        )
+
+    async def mark_enqueued(self, job_id: UUID, enqueued_at: datetime) -> None:
+        """Persist the point at which RQ accepted a durable job."""
+        await self._session.execute(
+            update(JobModel).where(JobModel.id == job_id).values(enqueued_at=enqueued_at)
         )

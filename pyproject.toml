@@ -15,6 +15,8 @@ dependencies = [
     "python-multipart>=0.0.20,<1",
     "sqlalchemy[asyncio]>=2.0,<3",
     "uvicorn>=0.34,<1",
+    "redis>=6,<7",
+    "rq>=2,<3",
 ]
 
 [build-system]

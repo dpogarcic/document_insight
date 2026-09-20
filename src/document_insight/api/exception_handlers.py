@@ -17,6 +17,7 @@ from document_insight.application.ingestion.exceptions import (
     IngestionForbiddenError,
     InvalidDepartmentScopeError,
     ObjectStorageUnavailableError,
+    QueueUnavailableError,
     UnsupportedDocumentTypeError,
 )
 from document_insight.application.jobs.exceptions import JobNotFoundError
@@ -108,6 +109,14 @@ def register_exception_handlers(app: FastAPI) -> None:
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "object_storage_unavailable",
             "Document storage is unavailable.",
+        )
+
+    @app.exception_handler(QueueUnavailableError)
+    async def handle_queue_unavailable(_: Request, __: Exception) -> JSONResponse:
+        return error_response(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "queue_unavailable",
+            "Document processing is temporarily unavailable. Please retry the upload.",
         )
 
     @app.exception_handler(JobNotFoundError)

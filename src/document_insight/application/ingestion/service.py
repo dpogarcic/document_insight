@@ -1,5 +1,6 @@
 """Application workflow for validating and storing document originals."""
 
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -30,6 +31,7 @@ from document_insight.infrastructure.document_version.protocol import (
 )
 from document_insight.infrastructure.job.protocol import CreateJob, JobRepository
 from document_insight.infrastructure.object_storage.protocol import OriginalObjectStorage
+from document_insight.infrastructure.queue.protocol import ProcessingQueue
 
 _SIGNATURES = {
     DocumentMediaType.PDF: (b"%PDF-", ".pdf"),
@@ -50,6 +52,7 @@ class IngestionService:
         jobs: JobRepository,
         transactions: TransactionManager,
         object_storage: OriginalObjectStorage,
+        processing_queue: ProcessingQueue,
         max_upload_bytes: int,
     ) -> None:
         self._documents = documents
@@ -59,6 +62,7 @@ class IngestionService:
         self._jobs = jobs
         self._transactions = transactions
         self._object_storage = object_storage
+        self._processing_queue = processing_queue
         self._max_upload_bytes = max_upload_bytes
 
     async def ingest(self, command: IngestDocumentCommand) -> IngestionResult:
@@ -137,20 +141,24 @@ class IngestionService:
                         created_by=command.actor.user_id,
                     )
                 )
-
-            return IngestionResult(
-                document_id=document_id,
-                document_version_id=version_id,
-                job_id=job_id,
-                version_number=version_number,
-                object_key=object_key,
-                media_type=media_type,
-                size_bytes=len(command.content),
-                content_sha256=content_sha256,
-            )
         except Exception:
             await self._object_storage.delete(object_key)
             raise
+
+        await self._processing_queue.enqueue_ingestion(job_id, command.correlation_id)
+        async with self._transactions.begin():
+            await self._jobs.mark_enqueued(job_id, datetime.now(UTC))
+
+        return IngestionResult(
+            document_id=document_id,
+            document_version_id=version_id,
+            job_id=job_id,
+            version_number=version_number,
+            object_key=object_key,
+            media_type=media_type,
+            size_bytes=len(command.content),
+            content_sha256=content_sha256,
+        )
 
     async def _resolve_departments(self, command: IngestDocumentCommand) -> tuple[UUID, ...]:
         """Authorize the target and return its effective department assignments."""

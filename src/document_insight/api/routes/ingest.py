@@ -23,7 +23,7 @@ CurrentUser = Annotated[AuthorizationContext, Depends(get_current_user)]
 @router.post(
     "/ingest",
     response_model=IngestStoredDTO,
-    status_code=status.HTTP_203_NON_AUTHORITATIVE_INFORMATION,
+    status_code=status.HTTP_202_ACCEPTED,
 )
 async def ingest_document(
     file: Annotated[UploadFile, File(description="PDF or image document, maximum 25 MiB")],
@@ -40,7 +40,7 @@ async def ingest_document(
         Form(description="Initial departments selected by a tenant admin for a new document"),
     ] = None,
 ) -> IngestStoredDTO:
-    """Validate and store an original; queue acceptance is implemented separately."""
+    """Validate, store, and enqueue an immutable document version for processing."""
     content = await file.read(settings.upload_max_bytes + 1)
     command = IngestDocumentCommand(
         content=content,

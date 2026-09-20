@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     s3_bucket_name: str = "document-insight-originals"
     s3_region: str = "us-east-1"
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, ge=10 * 1024 * 1024)
+    redis_url: str = "redis://localhost:6379/0"
+    rq_ingestion_queue_name: str = "ingestion"
 
 
 @lru_cache
