@@ -62,7 +62,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.CheckConstraint(
-            "capability IN ('ner', 'chunking', 'lexical', 'embedding', 'reranking', 'generation')",
+            "capability IN ('ner', 'chunking', 'lexical', 'embedding', 'reranking', 'generation', 'retrieval')",
             name="valid_capability",
         ),
         sa.PrimaryKeyConstraint("id"),
@@ -82,7 +82,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.CheckConstraint(
-            "capability IN ('ner', 'chunking', 'lexical', 'embedding', 'reranking', 'generation')",
+            "capability IN ('ner', 'chunking', 'lexical', 'embedding', 'reranking', 'generation', 'retrieval')",
             name="valid_capability",
         ),
         sa.CheckConstraint("status IN ('draft', 'validated', 'retired')", name="valid_status"),
