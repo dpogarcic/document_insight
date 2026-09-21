@@ -94,3 +94,30 @@ class SqlAlchemyDocumentVersionRepository(DocumentVersionRepository):
             .where(DocumentVersionModel.id == version_id)
             .values(status=DocumentVersionStatus.FAILED.value)
         )
+
+    async def mark_ready(self, version_id: UUID) -> None:
+        """Mark one complete derived-data version ready for promotion."""
+        await self._session.execute(
+            update(DocumentVersionModel)
+            .where(DocumentVersionModel.id == version_id)
+            .values(status=DocumentVersionStatus.READY.value)
+        )
+
+    async def is_newer_than(self, candidate_id: UUID, current_id: UUID) -> bool:
+        """Compare immutable version numbers without leaking another tenant's metadata."""
+        candidate = await self._session.scalar(
+            select(DocumentVersionModel.document_id, DocumentVersionModel.version_number).where(
+                DocumentVersionModel.id == candidate_id
+            )
+        )
+        current = await self._session.scalar(
+            select(DocumentVersionModel.document_id, DocumentVersionModel.version_number).where(
+                DocumentVersionModel.id == current_id
+            )
+        )
+        return (
+            candidate is not None
+            and current is not None
+            and candidate.document_id == current.document_id
+            and candidate.version_number > current.version_number
+        )

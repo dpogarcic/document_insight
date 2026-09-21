@@ -5,7 +5,11 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from document_insight.application.processing.models import NerResult, ParsedDocument
+from document_insight.application.processing.models import (
+    DocumentLanguage,
+    NerResult,
+    ParsedDocument,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +19,13 @@ class CreateExtractedDocument:
     document_version_id: UUID
     tenant_id: UUID
     parsed: ParsedDocument
+
+
+@dataclass(frozen=True, slots=True)
+class NerMetadata:
+    """Language metadata required by downstream chunking."""
+
+    language: DocumentLanguage
 
 
 class ExtractedDocumentRepository(Protocol):
@@ -36,3 +47,6 @@ class ExtractedDocumentRepository(Protocol):
         self, document_version_id: UUID, result: NerResult, completed_at: datetime
     ) -> None:
         """Persist language and provider metadata for the completed NER stage."""
+
+    async def get_ner_metadata(self, document_version_id: UUID) -> NerMetadata | None:
+        """Return persisted language metadata after a completed NER stage."""

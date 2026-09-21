@@ -49,6 +49,8 @@ class ProcessingJob:
     tenant_id: UUID
     document_version_id: UUID
     correlation_id: UUID
+    ingestion_profile_id: UUID | None
+    index_generation_id: UUID | None
 
 
 @dataclass(frozen=True, slots=True)

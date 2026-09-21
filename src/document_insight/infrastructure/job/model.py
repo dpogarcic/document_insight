@@ -47,6 +47,16 @@ class JobModel(Base):
         unique=True,
         index=True,
     )
+    ingestion_profile_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("ingestion_profiles.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    index_generation_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("index_generations.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     idempotency_key: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
         nullable=False,

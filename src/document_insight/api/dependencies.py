@@ -14,6 +14,9 @@ from document_insight.application.auth.service import AuthService
 from document_insight.application.ingestion.service import IngestionService
 from document_insight.application.jobs.service import JobService
 from document_insight.config import Settings, get_settings
+from document_insight.infrastructure.active_profile.repository import (
+    SqlAlchemyActiveProfileRepository,
+)
 from document_insight.infrastructure.database.session import get_db_session
 from document_insight.infrastructure.database.transaction import (
     SqlAlchemyTransactionManager,
@@ -27,6 +30,9 @@ from document_insight.infrastructure.document_department.repository import (
 )
 from document_insight.infrastructure.document_version.repository import (
     SqlAlchemyDocumentVersionRepository,
+)
+from document_insight.infrastructure.index_generation.repository import (
+    SqlAlchemyIndexGenerationRepository,
 )
 from document_insight.infrastructure.job.repository import SqlAlchemyJobRepository
 from document_insight.infrastructure.object_storage.s3 import S3OriginalObjectStorage
@@ -143,6 +149,8 @@ def get_ingestion_service(
         document_departments=SqlAlchemyDocumentDepartmentRepository(session),
         document_versions=SqlAlchemyDocumentVersionRepository(session),
         jobs=SqlAlchemyJobRepository(session),
+        active_profiles=SqlAlchemyActiveProfileRepository(session),
+        index_generations=SqlAlchemyIndexGenerationRepository(session),
         transactions=SqlAlchemyTransactionManager(session),
         object_storage=object_storage,
         processing_queue=processing_queue,

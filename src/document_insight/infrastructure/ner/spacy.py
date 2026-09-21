@@ -4,6 +4,7 @@ import spacy
 from lingua import Language, LanguageDetector, LanguageDetectorBuilder
 from spacy.language import Language as SpacyLanguage
 
+from document_insight.application.configuration.models import NerConfiguration
 from document_insight.application.processing.exceptions import NerError
 from document_insight.application.processing.models import (
     DocumentLanguage,
@@ -11,7 +12,10 @@ from document_insight.application.processing.models import (
     NamedEntity,
     NerResult,
 )
-from document_insight.infrastructure.ner.protocol import NamedEntityRecognizer
+from document_insight.infrastructure.ner.protocol import (
+    NamedEntityRecognizer,
+    NamedEntityRecognizerFactory,
+)
 
 RAG_ENTITY_LABEL_ALLOWLIST = frozenset(EntityLabel)
 _SPACY_LABEL_ALIASES = {"PER": EntityLabel.PERSON}
@@ -70,3 +74,16 @@ class SpacyNamedEntityRecognizer(NamedEntityRecognizer):
                 )
             )
         return NerResult(language, "spacy", self._model_names[language], tuple(entities))
+
+
+class SpacyNamedEntityRecognizerFactory(NamedEntityRecognizerFactory):
+    """Create local spaCy recognizers only for explicitly supported profiles."""
+
+    def create(self, configuration: NerConfiguration) -> NamedEntityRecognizer:
+        """Build the recognizer described by the persisted NER snapshot."""
+        if configuration.provider != "spacy":
+            raise ValueError(f"Unsupported NER provider: {configuration.provider}")
+        return SpacyNamedEntityRecognizer(
+            configuration.english_model,
+            configuration.croatian_model,
+        )

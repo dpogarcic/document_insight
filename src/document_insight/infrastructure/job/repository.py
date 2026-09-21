@@ -26,6 +26,8 @@ class SqlAlchemyJobRepository(JobRepository):
                 document_version_id=command.document_version_id,
                 idempotency_key=command.idempotency_key,
                 correlation_id=command.correlation_id,
+                ingestion_profile_id=command.ingestion_profile_id,
+                index_generation_id=command.index_generation_id,
                 status="queued",
                 attempt_count=0,
                 created_by=command.created_by,
@@ -77,6 +79,8 @@ class SqlAlchemyJobRepository(JobRepository):
                 JobModel.tenant_id,
                 JobModel.document_version_id,
                 JobModel.correlation_id,
+                JobModel.ingestion_profile_id,
+                JobModel.index_generation_id,
             )
         )
         row = result.one_or_none()
@@ -87,6 +91,8 @@ class SqlAlchemyJobRepository(JobRepository):
             tenant_id=row.tenant_id,
             document_version_id=row.document_version_id,
             correlation_id=row.correlation_id,
+            ingestion_profile_id=row.ingestion_profile_id,
+            index_generation_id=row.index_generation_id,
         )
 
     async def fail(self, job_id: UUID, error_code: str, finished_at: datetime) -> None:
@@ -99,4 +105,12 @@ class SqlAlchemyJobRepository(JobRepository):
                 error_code=error_code,
                 finished_at=finished_at,
             )
+        )
+
+    async def mark_ready(self, job_id: UUID, finished_at: datetime) -> None:
+        """Record successful end-to-end processing without queue-only state."""
+        await self._session.execute(
+            update(JobModel)
+            .where(JobModel.id == job_id)
+            .values(status=JobStatus.READY.value, error_code=None, finished_at=finished_at)
         )

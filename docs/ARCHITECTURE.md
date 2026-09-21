@@ -92,8 +92,12 @@ Document department membership uses the separate many-to-many model described in
    canonical entity metadata through durable idempotent checkpoints. Only canonical
    RAG-relevant entity labels (`PERSON`, `ORG`, `GPE`, `LOC`, `PRODUCT`, `EVENT`, and
    `DATE`) are retained; repeated mentions increment a document-version-level occurrence
-   count instead of creating duplicate rows. Later stages write chunks, embeddings, and
-   lexical-index entries.
+   count instead of creating duplicate rows. The worker then writes deterministic,
+   page-aware chunks under the document version, retaining page and character offsets for
+   citations. PostgreSQL generates a `simple` full-text index for each chunk; this temporary
+   lexical index is not BM25. The worker then obtains profile-bound embeddings for every
+   chunk through the configured OpenAI-compatible endpoint and persists them with the
+   embedding profile that produced them.
 6. When processing succeeds, the worker promotes that version atomically only if it is newer than the document's current ready version. Until then, the prior ready version remains searchable.
 
 ### Job status
@@ -124,6 +128,16 @@ contains a display value, canonical label, normalized value, occurrence count, d
 language, and NER provider/model provenance. Character offsets are intentionally omitted:
 the chunk index is the source of passage-level retrieval and exact citations.
 
+### Capability configuration lifecycle
+
+Chunking, lexical indexing, embedding, reranking, and generation use immutable capability
+profiles selected through explicit database-backed activation rather than directly from
+deployment environment variables. Jobs and index generations retain their ingestion
+profile; each query resolves one query profile at its start. During an embedding or lexical
+transition, queries search explicitly enabled compatible cohorts separately and fuse their
+ranked results rather than comparing scores across incompatible vector spaces. See ADR 004
+for the profile, activation, and audit model.
+
 ## Deployment position
 
 ### Current commitment
@@ -152,3 +166,4 @@ the chunk index is the source of passage-level retrieval and exact citations.
 - [ADR 001: Service boundaries](adr/001-service-boundaries.md)
 - [ADR 002: Async processing and versioning](adr/002-async-processing.md)
 - [ADR 003: Tenant isolation and security](adr/003-tenant-isolation.md)
+- [ADR 004: Capability configuration profiles](adr/004-capability-configuration-profiles.md)

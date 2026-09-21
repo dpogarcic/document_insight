@@ -8,7 +8,8 @@ Before planning or changing implementation code, read these documents in order:
 2. `docs/adr/001-service-boundaries.md`
 3. `docs/adr/002-async-processing.md`
 4. `docs/adr/003-tenant-isolation.md`
-5. `docs/CODE_QUALITY.md`
+5. `docs/adr/004-capability-configuration-profiles.md`
+6. `docs/CODE_QUALITY.md`
 
 Treat these documents as the current implementation contract, even while their status is
 `In Review`. If a request conflicts with them, explain the conflict and obtain a clear
@@ -62,8 +63,14 @@ Do not add optional stretch features unless the user explicitly requests them.
 - Provider selection is explicit by capability, such as `EMBEDDING_PROVIDER` or
   `GENERATION_PROVIDER`. A URL or model name alone must not be used to infer a provider
   protocol.
-- Initial model plan: local BGE embeddings and a Mistral generation API. Provider
-  protocols must make alternate supported implementations possible.
+- Capability behavior is selected through immutable, database-backed profiles and explicit
+  active-profile pointers. Deployments may add adapter support but must not activate a new
+  chunking, lexical, embedding, reranking, or generation configuration implicitly. Jobs
+  and index generations use their persisted ingestion profile; queries use one query
+  profile resolved at request start. See ADR 004.
+- Initial model plan: a BGE embedding model and a generation model, both through the
+  `openai_compatible` provider protocol. Provider protocols must make alternate supported
+  implementations possible.
 - Retrieval is hybrid. Lexical and vector retrieval must receive identical authorization
   filters, candidates are fused with RRF, then reranked before `top_k` is applied.
 - True BM25 requires a chosen lexical implementation. `pg_search` is a candidate under

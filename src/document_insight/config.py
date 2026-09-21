@@ -32,9 +32,8 @@ class Settings(BaseSettings):
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, ge=10 * 1024 * 1024)
     redis_url: str = "redis://localhost:6379/0"
     rq_ingestion_queue_name: str = "ingestion"
-    ner_provider: Literal["spacy"] = "spacy"
-    ner_en_model: str = "en_core_web_sm"
-    ner_hr_model: str = "hr_core_news_sm"
+    embedding_base_url: str = "http://localhost:12434/engines/v1"
+    embedding_api_key: SecretStr | None = None
 
 
 @lru_cache

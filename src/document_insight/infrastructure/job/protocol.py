@@ -18,6 +18,8 @@ class CreateJob:
     idempotency_key: UUID
     correlation_id: UUID
     created_by: UUID
+    ingestion_profile_id: UUID
+    index_generation_id: UUID
 
 
 class JobRepository(Protocol):
@@ -37,3 +39,6 @@ class JobRepository(Protocol):
 
     async def fail(self, job_id: UUID, error_code: str, finished_at: datetime) -> None:
         """Persist a safe terminal processing failure."""
+
+    async def mark_ready(self, job_id: UUID, finished_at: datetime) -> None:
+        """Persist completion after every derived-data checkpoint succeeds."""

@@ -7,6 +7,7 @@ from document_insight.api.exception_handlers import register_exception_handlers
 from document_insight.api.logging_config import configure_server_logging
 from document_insight.api.middleware.correlation_id import CorrelationIdMiddleware
 from document_insight.api.routes import api_router
+from document_insight.infrastructure.database import model_registry as _model_registry  # noqa: F401
 
 
 def create_app() -> FastAPI:

@@ -6,11 +6,12 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from document_insight.application.processing.models import NerResult
+from document_insight.application.processing.models import DocumentLanguage, NerResult
 from document_insight.infrastructure.extracted_document.model import ExtractedDocumentModel
 from document_insight.infrastructure.extracted_document.protocol import (
     CreateExtractedDocument,
     ExtractedDocumentRepository,
+    NerMetadata,
 )
 
 
@@ -76,3 +77,12 @@ class SqlAlchemyExtractedDocumentRepository(ExtractedDocumentRepository):
                 ner_completed_at=completed_at,
             )
         )
+
+    async def get_ner_metadata(self, document_version_id: UUID) -> NerMetadata | None:
+        """Load the durable language detected by the completed NER stage."""
+        language = await self._session.scalar(
+            select(ExtractedDocumentModel.detected_language).where(
+                ExtractedDocumentModel.document_version_id == document_version_id
+            )
+        )
+        return None if language is None else NerMetadata(DocumentLanguage(language))

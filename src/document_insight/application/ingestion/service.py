@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from document_insight.application.auth.models import AuthorizationContext, UserRole
+from document_insight.application.configuration.exceptions import ProcessingProfileUnavailableError
 from document_insight.application.ingestion.commands import IngestDocumentCommand
 from document_insight.application.ingestion.exceptions import (
     DocumentNotFoundError,
@@ -19,6 +20,7 @@ from document_insight.application.ingestion.models import (
     DocumentMediaType,
     IngestionResult,
 )
+from document_insight.infrastructure.active_profile.protocol import ActiveProfileRepository
 from document_insight.infrastructure.database.transaction import TransactionManager
 from document_insight.infrastructure.department.protocol import DepartmentRepository
 from document_insight.infrastructure.document.protocol import DocumentRepository
@@ -28,6 +30,10 @@ from document_insight.infrastructure.document_department.protocol import (
 from document_insight.infrastructure.document_version.protocol import (
     CreateDocumentVersion,
     DocumentVersionRepository,
+)
+from document_insight.infrastructure.index_generation.protocol import (
+    CreateIndexGeneration,
+    IndexGenerationRepository,
 )
 from document_insight.infrastructure.job.protocol import CreateJob, JobRepository
 from document_insight.infrastructure.object_storage.protocol import OriginalObjectStorage
@@ -50,6 +56,8 @@ class IngestionService:
         document_departments: DocumentDepartmentRepository,
         document_versions: DocumentVersionRepository,
         jobs: JobRepository,
+        active_profiles: ActiveProfileRepository,
+        index_generations: IndexGenerationRepository,
         transactions: TransactionManager,
         object_storage: OriginalObjectStorage,
         processing_queue: ProcessingQueue,
@@ -60,6 +68,8 @@ class IngestionService:
         self._document_departments = document_departments
         self._document_versions = document_versions
         self._jobs = jobs
+        self._active_profiles = active_profiles
+        self._index_generations = index_generations
         self._transactions = transactions
         self._object_storage = object_storage
         self._processing_queue = processing_queue
@@ -83,6 +93,7 @@ class IngestionService:
 
         document_id = command.document_id or uuid4()
         version_id = uuid4()
+        index_generation_id = uuid4()
         job_id = uuid4()
         idempotency_key = uuid4()
         object_key = (
@@ -95,6 +106,11 @@ class IngestionService:
         content_sha256 = sha256(command.content).hexdigest()
         try:
             async with self._transactions.begin():
+                ingestion_profile_id = await self._active_profiles.get_ingestion_profile_id(
+                    "platform"
+                )
+                if ingestion_profile_id is None:
+                    raise ProcessingProfileUnavailableError
                 if command.document_id is None:
                     await self._documents.create(
                         document_id=document_id,
@@ -131,6 +147,14 @@ class IngestionService:
                         created_by=command.actor.user_id,
                     )
                 )
+                await self._index_generations.create(
+                    CreateIndexGeneration(
+                        index_generation_id=index_generation_id,
+                        tenant_id=command.actor.tenant_id,
+                        document_version_id=version_id,
+                        ingestion_profile_id=ingestion_profile_id,
+                    )
+                )
                 await self._jobs.create(
                     CreateJob(
                         job_id=job_id,
@@ -139,6 +163,8 @@ class IngestionService:
                         idempotency_key=idempotency_key,
                         correlation_id=command.correlation_id,
                         created_by=command.actor.user_id,
+                        ingestion_profile_id=ingestion_profile_id,
+                        index_generation_id=index_generation_id,
                     )
                 )
         except Exception:

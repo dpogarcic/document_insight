@@ -66,9 +66,9 @@ services:
       S3_BUCKET_NAME: document-insight-originals
       S3_REGION: us-east-1
       JWT_SECRET_KEY: replace-with-a-long-random-development-secret
-      NER_PROVIDER: spacy
-      NER_EN_MODEL: en_core_web_sm
-      NER_HR_MODEL: hr_core_news_sm
+    models:
+      embedding:
+        endpoint_var: EMBEDDING_BASE_URL
     depends_on:
       database:
         condition: service_healthy
@@ -80,3 +80,8 @@ services:
 volumes:
   postgres-data:
   object-storage-data:
+
+models:
+  embedding:
+    model: hf.co/vonjack/bge-m3-gguf:Q8_0
+    context_size: 8192

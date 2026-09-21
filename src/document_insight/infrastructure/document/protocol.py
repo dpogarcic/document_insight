@@ -21,3 +21,11 @@ class DocumentRepository(Protocol):
         created_by: UUID,
     ) -> None:
         """Create one logical document."""
+
+    async def get_current_ready_version_id(self, document_id: UUID, tenant_id: UUID) -> UUID | None:
+        """Return the current searchable version while the document is locked."""
+
+    async def set_current_ready_version_id(
+        self, document_id: UUID, tenant_id: UUID, document_version_id: UUID
+    ) -> None:
+        """Promote one already-ready version as the document's searchable version."""

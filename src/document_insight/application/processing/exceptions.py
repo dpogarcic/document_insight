@@ -11,3 +11,7 @@ class UnsupportedProcessingMediaTypeError(ParsingError):
 
 class NerError(Exception):
     """The configured NER provider could not safely process extracted text."""
+
+
+class EmbeddingError(Exception):
+    """The configured embedder could not produce profile-compatible vectors."""

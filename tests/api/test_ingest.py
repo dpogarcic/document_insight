@@ -16,12 +16,17 @@ from document_insight.api.dependencies import get_object_storage, get_processing
 from document_insight.application.auth.models import UserCredentials, UserRole
 from document_insight.application.ingestion.exceptions import QueueUnavailableError
 from document_insight.config import Settings, get_settings
+from document_insight.infrastructure.active_profile.model import ActiveProfileModel
+from document_insight.infrastructure.capability_profile.model import CapabilityProfileModel
+from document_insight.infrastructure.configuration_snapshot.model import ConfigurationSnapshotModel
 from document_insight.infrastructure.database.base import Base
 from document_insight.infrastructure.database.session import get_db_session
 from document_insight.infrastructure.department.model import DepartmentModel
 from document_insight.infrastructure.document.model import DocumentModel
 from document_insight.infrastructure.document_department.model import DocumentDepartmentModel
 from document_insight.infrastructure.document_version.model import DocumentVersionModel
+from document_insight.infrastructure.index_generation.model import IndexGenerationModel
+from document_insight.infrastructure.ingestion_profile.model import IngestionProfileModel
 from document_insight.infrastructure.job.model import JobModel
 from document_insight.infrastructure.security.token_issuer import JwtTokenIssuer
 from document_insight.infrastructure.tenant.model import TenantModel
@@ -67,6 +72,7 @@ class IngestContext:
     tenant_id: UUID
     general_department_id: UUID
     legal_department_id: UUID
+    ingestion_profile_id: UUID
 
 
 @pytest.fixture
@@ -87,7 +93,50 @@ async def ingest_context() -> AsyncIterator[IngestContext]:
     department_id = uuid4()
     legal_department_id = uuid4()
     user_id = uuid4()
+    snapshot_ids = {
+        capability: uuid4() for capability in ("ner", "chunking", "lexical", "embedding")
+    }
+    profile_ids = {capability: uuid4() for capability in snapshot_ids}
+    ingestion_profile_id = uuid4()
     async with session_factory.begin() as session:
+        session.add_all(
+            ConfigurationSnapshotModel(
+                id=snapshot_ids[capability],
+                capability=capability,
+                schema_version=1,
+                fingerprint=f"{capability}-test-fingerprint",
+                configuration_json={},
+            )
+            for capability in snapshot_ids
+        )
+        session.add_all(
+            CapabilityProfileModel(
+                id=profile_ids[capability],
+                capability=capability,
+                name=f"{capability}-test-v1",
+                configuration_snapshot_id=snapshot_ids[capability],
+                status="validated",
+            )
+            for capability in snapshot_ids
+        )
+        session.add(
+            IngestionProfileModel(
+                id=ingestion_profile_id,
+                ner_profile_id=profile_ids["ner"],
+                chunking_profile_id=profile_ids["chunking"],
+                lexical_profile_id=profile_ids["lexical"],
+                embedding_profile_id=profile_ids["embedding"],
+            )
+        )
+        session.add(
+            ActiveProfileModel(
+                id=uuid4(),
+                scope="platform",
+                profile_kind="ingestion",
+                ingestion_profile_id=ingestion_profile_id,
+                revision=1,
+            )
+        )
         session.add(TenantModel(id=tenant_id, name="Example Tenant"))
         session.add(DepartmentModel(id=department_id, tenant_id=tenant_id, name="General"))
         session.add(DepartmentModel(id=legal_department_id, tenant_id=tenant_id, name="Legal"))
@@ -159,6 +208,7 @@ async def ingest_context() -> AsyncIterator[IngestContext]:
             tenant_id=tenant_id,
             general_department_id=department_id,
             legal_department_id=legal_department_id,
+            ingestion_profile_id=ingestion_profile_id,
         )
 
     await engine.dispose()
@@ -257,6 +307,14 @@ async def test_ingest_stores_original_and_document_metadata(
     assert job.enqueued_at is not None
     assert str(job.correlation_id) == response.headers["x-correlation-id"]
     assert job.idempotency_key != job.id
+    assert job.ingestion_profile_id == ingest_context.ingestion_profile_id
+    assert job.index_generation_id is not None
+    async with session_factory() as generation_session:
+        generation = await generation_session.scalar(
+            select(IndexGenerationModel).where(IndexGenerationModel.id == job.index_generation_id)
+        )
+    assert generation is not None
+    assert generation.ingestion_profile_id == ingest_context.ingestion_profile_id
     assert ingest_context.processing_queue.published == [
         (UUID(body["job_id"]), UUID(response.headers["x-correlation-id"]))
     ]

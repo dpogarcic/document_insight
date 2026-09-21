@@ -52,6 +52,17 @@ class CanonicalEntity:
     occurrence_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class DocumentChunk:
+    """One citation-ready text passage scoped to an extracted document."""
+
+    ordinal: int
+    text: str
+    start_offset: int
+    end_offset: int
+    page_number: int
+
+
 def canonicalize_entities(entities: tuple[NamedEntity, ...]) -> tuple[CanonicalEntity, ...]:
     """Collapse repeated label/value pairs while retaining their first display form."""
     counts: dict[tuple[EntityLabel, str], int] = {}

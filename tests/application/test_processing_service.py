@@ -8,9 +8,19 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from document_insight.application.configuration.models import (
+    ChunkingConfiguration,
+    EmbeddingConfiguration,
+    NerConfiguration,
+    ResolvedIngestionProfile,
+)
 from document_insight.application.ingestion.models import DocumentMediaType
 from document_insight.application.jobs.models import ProcessingJob
-from document_insight.application.processing.exceptions import NerError, ParsingError
+from document_insight.application.processing.exceptions import (
+    EmbeddingError,
+    NerError,
+    ParsingError,
+)
 from document_insight.application.processing.models import (
     CanonicalEntity,
     DocumentLanguage,
@@ -20,15 +30,19 @@ from document_insight.application.processing.models import (
     ParsedDocument,
 )
 from document_insight.application.processing.service import ProcessingService
+from document_insight.infrastructure.chunk.protocol import ChunkForEmbedding
+from document_insight.infrastructure.chunk_embedding.protocol import CreateChunkEmbeddings
 from document_insight.infrastructure.document_version.protocol import ProcessingDocumentVersion
 from document_insight.infrastructure.entity.protocol import CreateEntities
 from document_insight.infrastructure.extracted_document.protocol import CreateExtractedDocument
+from document_insight.infrastructure.index_generation.protocol import IndexGeneration
 
 
 @dataclass
 class FakeJobs:
     job: ProcessingJob | None
     failures: list[tuple[UUID, str]] = field(default_factory=list)
+    ready: list[UUID] = field(default_factory=list)
 
     async def claim(self, _: UUID, __: datetime) -> ProcessingJob | None:
         return self.job
@@ -36,12 +50,17 @@ class FakeJobs:
     async def fail(self, job_id: UUID, error_code: str, _: datetime) -> None:
         self.failures.append((job_id, error_code))
 
+    async def mark_ready(self, job_id: UUID, _: datetime) -> None:
+        self.ready.append(job_id)
+
 
 @dataclass
 class FakeVersions:
     version: ProcessingDocumentVersion
     processing: list[UUID] = field(default_factory=list)
     failed: list[UUID] = field(default_factory=list)
+    ready: list[UUID] = field(default_factory=list)
+    document_id: UUID = field(default_factory=uuid4)
 
     async def mark_processing(self, version_id: UUID) -> None:
         self.processing.append(version_id)
@@ -49,8 +68,31 @@ class FakeVersions:
     async def mark_failed(self, version_id: UUID) -> None:
         self.failed.append(version_id)
 
+    async def mark_ready(self, version_id: UUID) -> None:
+        self.ready.append(version_id)
+
+    async def get_document_id(self, _: UUID, __: UUID) -> UUID:
+        return self.document_id
+
+    async def is_newer_than(self, _: UUID, __: UUID) -> bool:
+        return True
+
     async def get_for_processing(self, _: UUID, __: UUID) -> ProcessingDocumentVersion:
         return self.version
+
+
+@dataclass
+class FakeDocuments:
+    current_ready_version_id: UUID | None = None
+
+    async def lock(self, _: UUID, __: UUID) -> bool:
+        return True
+
+    async def get_current_ready_version_id(self, _: UUID, __: UUID) -> UUID | None:
+        return self.current_ready_version_id
+
+    async def set_current_ready_version_id(self, _: UUID, __: UUID, version_id: UUID) -> None:
+        self.current_ready_version_id = version_id
 
 
 @dataclass
@@ -77,6 +119,11 @@ class FakeExtractedDocuments:
         self.ner_results.append(result)
         self.ner_complete = True
 
+    async def get_ner_metadata(self, _: UUID):
+        from document_insight.infrastructure.extracted_document.protocol import NerMetadata
+
+        return NerMetadata(DocumentLanguage.ENGLISH) if self.ner_complete else None
+
 
 @dataclass
 class FakeEntities:
@@ -84,6 +131,109 @@ class FakeEntities:
 
     async def create_many(self, command: CreateEntities) -> None:
         self.created.append(command)
+
+
+@dataclass
+class FakeChunks:
+    created: list[object] = field(default_factory=list)
+    embedding_chunk: ChunkForEmbedding = field(
+        default_factory=lambda: ChunkForEmbedding(uuid4(), "chunk for embedding")
+    )
+
+    async def create_many(self, command: object) -> None:
+        self.created.append(command)
+
+    async def list_for_embedding(self, _: UUID, __: UUID) -> tuple[ChunkForEmbedding, ...]:
+        return (self.embedding_chunk,)
+
+
+@dataclass
+class FakeChunkEmbeddings:
+    created: list[CreateChunkEmbeddings] = field(default_factory=list)
+
+    async def create_many(self, command: CreateChunkEmbeddings) -> None:
+        self.created.append(command)
+
+
+@dataclass
+class FakeIndexGenerations:
+    generation: IndexGeneration
+    completed: list[UUID] = field(default_factory=list)
+    ready: list[UUID] = field(default_factory=list)
+
+    async def get(self, _: UUID, __: UUID) -> IndexGeneration:
+        return self.generation
+
+    async def mark_chunking_complete(self, generation_id: UUID, _: datetime) -> None:
+        self.completed.append(generation_id)
+        self.generation = IndexGeneration(
+            self.generation.index_generation_id,
+            self.generation.ingestion_profile_id,
+            datetime.now(),
+            self.generation.embedding_completed_at,
+        )
+
+    async def mark_embedding_complete(self, generation_id: UUID, _: datetime) -> None:
+        self.completed.append(generation_id)
+        self.generation = IndexGeneration(
+            self.generation.index_generation_id,
+            self.generation.ingestion_profile_id,
+            self.generation.chunking_completed_at,
+            datetime.now(),
+        )
+
+    async def mark_ready(self, generation_id: UUID) -> None:
+        self.ready.append(generation_id)
+
+
+class FakeChunker:
+    def chunk(self, text: str):
+        from document_insight.application.processing.models import DocumentChunk
+
+        return (DocumentChunk(0, text, 0, len(text), 1),)
+
+
+class FakeChunkerFactory:
+    def create(self, _: ChunkingConfiguration) -> FakeChunker:
+        return FakeChunker()
+
+
+class FakeProfileResolver:
+    def __init__(self, ingestion_profile_id: UUID) -> None:
+        self._ingestion_profile_id = ingestion_profile_id
+
+    async def resolve(self, _: UUID) -> ResolvedIngestionProfile:
+        return ResolvedIngestionProfile(
+            ingestion_profile_id=self._ingestion_profile_id,
+            ner_profile_id=uuid4(),
+            chunking_profile_id=uuid4(),
+            lexical_profile_id=uuid4(),
+            embedding_profile_id=uuid4(),
+            ner=NerConfiguration(
+                provider="fake", english_model="fake", croatian_model="fake", model_revision="1"
+            ),
+            chunking=ChunkingConfiguration(
+                implementation="fake",
+                implementation_revision="1",
+                max_chars=1_000,
+                overlap_chars=100,
+            ),
+            embedding=EmbeddingConfiguration(
+                provider="fake",
+                model="fake-embedding-model",
+                configuration_revision="1",
+                dimensions=2,
+                normalize=True,
+                batch_size=8,
+            ),
+        )
+
+    version = "1"
+
+    def chunk(self, text: str):
+        from document_insight.application.processing.models import DocumentChunk
+
+        return (DocumentChunk(0, text, 0, len(text), 1),)
 
 
 @dataclass
@@ -97,6 +247,38 @@ class FakeNer:
             raise self.error
         entity = NamedEntity("OpenAI", "openai", EntityLabel.ORG)
         return NerResult(DocumentLanguage.ENGLISH, "fake", "fake-ner", (entity,))
+
+
+@dataclass
+class FakeNerFactory:
+    recognizer: FakeNer
+    configurations: list[NerConfiguration] = field(default_factory=list)
+
+    def create(self, configuration: NerConfiguration) -> FakeNer:
+        self.configurations.append(configuration)
+        return self.recognizer
+
+
+@dataclass
+class FakeEmbedder:
+    error: Exception | None = None
+    calls: list[tuple[str, ...]] = field(default_factory=list)
+
+    async def embed(
+        self, texts: tuple[str, ...], _: EmbeddingConfiguration
+    ) -> tuple[tuple[float, ...], ...]:
+        self.calls.append(texts)
+        if self.error is not None:
+            raise self.error
+        return tuple((3.0, 4.0) for _ in texts)
+
+
+@dataclass
+class FakeEmbedderFactory:
+    embedder: FakeEmbedder
+
+    def create(self, _: EmbeddingConfiguration) -> FakeEmbedder:
+        return self.embedder
 
 
 @dataclass
@@ -134,7 +316,10 @@ def service_for(
     storage_error: Exception | None = None,
     extracted: bool = False,
     ner_complete: bool = False,
+    chunking_complete: bool = False,
+    embedding_complete: bool = False,
     ner_error: Exception | None = None,
+    embedding_error: Exception | None = None,
 ) -> tuple[
     ProcessingService,
     FakeJobs,
@@ -142,28 +327,50 @@ def service_for(
     FakeExtractedDocuments,
     FakeParser,
     FakeEntities,
+    FakeChunks,
     FakeNer,
+    FakeChunkEmbeddings,
+    FakeEmbedder,
 ]:
     """Build an isolated processing service and observable collaborator fakes."""
-    job = ProcessingJob(uuid4(), uuid4(), uuid4(), uuid4())
+    job = ProcessingJob(uuid4(), uuid4(), uuid4(), uuid4(), uuid4(), uuid4())
     versions = FakeVersions(
         ProcessingDocumentVersion(job.document_version_id, job.tenant_id, "object-key", media_type)
     )
+    logical_documents = FakeDocuments()
     jobs = FakeJobs(job)
     documents = FakeExtractedDocuments(existing=extracted, ner_complete=ner_complete)
     parser = FakeParser(parser_error)
     entities = FakeEntities()
+    chunks = FakeChunks()
+    chunk_embeddings = FakeChunkEmbeddings()
+    generations = FakeIndexGenerations(
+        IndexGeneration(
+            job.index_generation_id,
+            job.ingestion_profile_id,
+            datetime.now() if chunking_complete else None,
+            datetime.now() if embedding_complete else None,
+        )
+    )
     ner = FakeNer(ner_error)
+    embedder = FakeEmbedder(embedding_error)
     return (
         ProcessingService(
             jobs,
+            logical_documents,
             versions,
             documents,
             entities,
+            chunks,
+            chunk_embeddings,
+            generations,
+            FakeProfileResolver(job.ingestion_profile_id),  # type: ignore[arg-type]
             FakeStorage(error=storage_error),
             pdf_parser=parser,
             image_parser=parser,
-            ner=ner,
+            ner_recognizers=FakeNerFactory(ner),
+            chunkers=FakeChunkerFactory(),
+            embedders=FakeEmbedderFactory(embedder),
             transactions=FakeTransactions(),
         ),
         jobs,
@@ -171,14 +378,19 @@ def service_for(
         documents,
         parser,
         entities,
+        chunks,
         ner,
+        chunk_embeddings,
+        embedder,
     )
 
 
 @pytest.mark.anyio
 async def test_processing_persists_one_version_scoped_parsing_checkpoint() -> None:
     """A claimed PDF moves to processing and writes one immutable extraction result."""
-    service, jobs, versions, documents, parser, entities, ner = service_for()
+    service, jobs, versions, documents, parser, entities, chunks, ner, embeddings, embedder = (
+        service_for()
+    )
 
     await service.process(jobs.job.job_id)  # type: ignore[union-attr]
 
@@ -195,14 +407,20 @@ async def test_processing_persists_one_version_scoped_parsing_checkpoint() -> No
             entities=(CanonicalEntity("OpenAI", "openai", EntityLabel.ORG, 1),),
         )
     ]
+    assert len(chunks.created) == 1
+    assert embedder.calls == [("chunk for embedding",)]
+    assert len(embeddings.created) == 1
+    assert embeddings.created[0].embeddings[0].values == (3.0, 4.0)
+    assert jobs.ready == [jobs.job.job_id]  # type: ignore[union-attr]
+    assert versions.ready == [jobs.job.document_version_id]  # type: ignore[union-attr]
     assert ner.calls == ["parsed text"]
 
 
 @pytest.mark.anyio
 async def test_processing_skips_completed_parsing_checkpoint() -> None:
     """Re-delivery never reparses or duplicates a completed version result."""
-    service, jobs, _, documents, parser, entities, ner = service_for(
-        extracted=True, ner_complete=True
+    service, jobs, _, documents, parser, entities, chunks, ner, _, embedder = service_for(
+        extracted=True, ner_complete=True, chunking_complete=True
     )
 
     await service.process(jobs.job.job_id)  # type: ignore[union-attr]
@@ -210,13 +428,15 @@ async def test_processing_skips_completed_parsing_checkpoint() -> None:
     assert documents.created == []
     assert parser.calls == 0
     assert entities.created == []
+    assert chunks.created == []
     assert ner.calls == []
+    assert embedder.calls == [("chunk for embedding",)]
 
 
 @pytest.mark.anyio
 async def test_parsing_failure_marks_job_and_version_failed() -> None:
     """Malformed input exposes no parser detail and reaches a durable terminal state."""
-    service, jobs, versions, documents, _, _, _ = service_for(parser_error=ParsingError())
+    service, jobs, versions, documents, _, _, _, _, _, _ = service_for(parser_error=ParsingError())
 
     await service.process(jobs.job.job_id)  # type: ignore[union-attr]
 
@@ -228,7 +448,7 @@ async def test_parsing_failure_marks_job_and_version_failed() -> None:
 @pytest.mark.anyio
 async def test_storage_failure_propagates_for_queue_retry() -> None:
     """Transient storage failures leave durable state retryable for RQ."""
-    service, jobs, versions, documents, _, _, _ = service_for(storage_error=OSError())
+    service, jobs, versions, documents, _, _, _, _, _, _ = service_for(storage_error=OSError())
 
     with pytest.raises(OSError):
         await service.process(jobs.job.job_id)  # type: ignore[union-attr]
@@ -241,7 +461,7 @@ async def test_storage_failure_propagates_for_queue_retry() -> None:
 @pytest.mark.anyio
 async def test_existing_parse_resumes_with_ner_and_checkpoints_empty_results() -> None:
     """NER resumes after parsing and completion does not depend on finding entities."""
-    service, jobs, _, documents, parser, entities, ner = service_for(extracted=True)
+    service, jobs, _, documents, parser, entities, _, ner, _, _ = service_for(extracted=True)
     ner.recognize = lambda text: NerResult(DocumentLanguage.CROATIAN, "fake", "fake-hr", ())
 
     await service.process(jobs.job.job_id)  # type: ignore[union-attr]
@@ -254,7 +474,7 @@ async def test_existing_parse_resumes_with_ner_and_checkpoints_empty_results() -
 @pytest.mark.anyio
 async def test_ner_result_is_deduplicated_to_document_version_metadata() -> None:
     """Repeated mentions persist once with a count and the first display spelling."""
-    service, jobs, _, _, _, entities, ner = service_for(extracted=True)
+    service, jobs, _, _, _, entities, _, ner, _, _ = service_for(extracted=True)
     ner.recognize = lambda text: NerResult(
         DocumentLanguage.ENGLISH,
         "fake",
@@ -279,7 +499,7 @@ async def test_ner_result_is_deduplicated_to_document_version_metadata() -> None
 @pytest.mark.anyio
 async def test_ner_failure_marks_job_and_version_failed() -> None:
     """Provider failures become safe durable state without storing raw error details."""
-    service, jobs, versions, documents, _, entities, _ = service_for(
+    service, jobs, versions, documents, _, entities, _, _, _, _ = service_for(
         extracted=True, ner_error=NerError()
     )
 
@@ -289,3 +509,18 @@ async def test_ner_failure_marks_job_and_version_failed() -> None:
     assert versions.failed == [jobs.job.document_version_id]  # type: ignore[union-attr]
     assert documents.ner_complete is False
     assert entities.created == []
+
+
+@pytest.mark.anyio
+async def test_embedding_failure_marks_job_and_version_failed() -> None:
+    """Embedding provider failures persist only a stable, safe failure code."""
+    service, jobs, versions, _, _, _, _, _, embeddings, embedder = service_for(
+        embedding_error=EmbeddingError()
+    )
+
+    await service.process(jobs.job.job_id)  # type: ignore[union-attr]
+
+    assert embedder.calls == [("chunk for embedding",)]
+    assert embeddings.created == []
+    assert jobs.failures == [(jobs.job.job_id, "embedding_failed")]  # type: ignore[union-attr]
+    assert versions.failed == [jobs.job.document_version_id]  # type: ignore[union-attr]

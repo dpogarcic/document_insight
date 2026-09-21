@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from document_insight.infrastructure.document.model import DocumentModel
@@ -56,4 +56,23 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
                 title=title,
                 created_by=created_by,
             )
+        )
+
+    async def get_current_ready_version_id(self, document_id: UUID, tenant_id: UUID) -> UUID | None:
+        """Read the current pointer under the caller's document lock."""
+        return await self._session.scalar(
+            select(DocumentModel.current_ready_version_id).where(
+                DocumentModel.id == document_id,
+                DocumentModel.tenant_id == tenant_id,
+            )
+        )
+
+    async def set_current_ready_version_id(
+        self, document_id: UUID, tenant_id: UUID, document_version_id: UUID
+    ) -> None:
+        """Update only the logical document's searchable-version pointer."""
+        await self._session.execute(
+            update(DocumentModel)
+            .where(DocumentModel.id == document_id, DocumentModel.tenant_id == tenant_id)
+            .values(current_ready_version_id=document_version_id)
         )
