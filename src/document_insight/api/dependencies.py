@@ -14,6 +14,7 @@ from document_insight.application.auth.service import AuthService
 from document_insight.application.documents.service import DocumentLibraryService
 from document_insight.application.ingestion.service import IngestionService
 from document_insight.application.jobs.service import JobService
+from document_insight.application.query.service import QueryPreparationService
 from document_insight.config import Settings, get_settings
 from document_insight.infrastructure.active_profile.repository import (
     SqlAlchemyActiveProfileRepository,
@@ -37,6 +38,9 @@ from document_insight.infrastructure.index_generation.repository import (
 )
 from document_insight.infrastructure.job.repository import SqlAlchemyJobRepository
 from document_insight.infrastructure.object_storage.s3 import S3OriginalObjectStorage
+from document_insight.infrastructure.query_profile.repository import (
+    SqlAlchemyQueryProfileRepository,
+)
 from document_insight.infrastructure.queue.rq import RqProcessingQueue
 from document_insight.infrastructure.security.password_hasher import Argon2PasswordHasher
 from document_insight.infrastructure.security.token_authenticator import JwtTokenAuthenticator
@@ -176,4 +180,13 @@ def get_document_library_service(session: DatabaseSession) -> DocumentLibrarySer
         document_departments=SqlAlchemyDocumentDepartmentRepository(session),
         document_versions=SqlAlchemyDocumentVersionRepository(session),
         transactions=SqlAlchemyTransactionManager(session),
+    )
+
+
+def get_query_preparation_service(session: DatabaseSession) -> QueryPreparationService:
+    """Compose authorization and immutable-profile setup before retrieval begins."""
+    return QueryPreparationService(
+        active_profiles=SqlAlchemyActiveProfileRepository(session),
+        query_profiles=SqlAlchemyQueryProfileRepository(session),
+        departments=SqlAlchemyDepartmentRepository(session),
     )

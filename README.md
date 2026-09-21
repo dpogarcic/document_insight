@@ -95,7 +95,7 @@ tracebacks use the response ID, while work outside an HTTP request uses `-`.
 | `GET` | `/documents` | List documents and visible departments within the caller's authorization scope | Implemented |
 | `POST` | `/documents/{document_id}/activate` | Tenant-admin-only explicit selection of a ready searchable version | Implemented |
 | `GET` | `/jobs/{job_id}` | Read an authorized processing-job status | Implemented |
-| `POST` | `/query` | Query authorized documents with optional filters and `top_k` | Contract only |
+| `POST` | `/query` | Authenticate and prepare an authorization-bounded retrieval request | Implemented through retrieval preparation |
 
 Registration intentionally creates a new tenant. Joining an existing tenant will use a
 future administrator-controlled invitation flow; public registration cannot select an

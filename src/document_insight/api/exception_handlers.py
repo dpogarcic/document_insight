@@ -25,6 +25,7 @@ from document_insight.application.ingestion.exceptions import (
     UnsupportedDocumentTypeError,
 )
 from document_insight.application.jobs.exceptions import JobNotFoundError
+from document_insight.application.query.exceptions import QueryProfileUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +146,14 @@ def register_exception_handlers(app: FastAPI) -> None:
             status.HTTP_404_NOT_FOUND,
             "job_not_found",
             "The requested job was not found.",
+        )
+
+    @app.exception_handler(QueryProfileUnavailableError)
+    async def handle_query_profile_unavailable(_: Request, __: Exception) -> JSONResponse:
+        return error_response(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "query_profile_unavailable",
+            "Document queries are not available because no active query profile is configured.",
         )
 
     @app.exception_handler(Exception)

@@ -1,0 +1,1 @@
+"""Authorized query preparation feature."""

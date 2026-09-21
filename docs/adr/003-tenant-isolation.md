@@ -52,7 +52,8 @@ Authorization is resolved in this order:
 4. Build an authorization scope containing the permitted tenant, departments, and roles/classifications. A non-admin document is eligible only when its department set intersects the user's permitted departments.
 5. Apply that scope as a mandatory predicate to document metadata, SQL queries, vector search, lexical search, source lookup, and answer generation.
 
-User-supplied query filters can only narrow this scope. They can never broaden it or override the tenant, department, role, or document-permission predicate.
+The optional user-supplied query `filter` is text for entity matching and lexical retrieval. It
+never changes or overrides the tenant, department, role, or document-permission predicate.
 
 ### Data isolation and metadata
 

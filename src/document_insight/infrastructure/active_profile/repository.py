@@ -23,3 +23,12 @@ class SqlAlchemyActiveProfileRepository(ActiveProfileRepository):
                 ActiveProfileModel.profile_kind == "ingestion",
             )
         )
+
+    async def get_query_profile_id(self, scope: str) -> UUID | None:
+        """Resolve the active query bundle without environment fallback."""
+        return await self._session.scalar(
+            select(ActiveProfileModel.query_profile_id).where(
+                ActiveProfileModel.scope == scope,
+                ActiveProfileModel.profile_kind == "query",
+            )
+        )

@@ -117,7 +117,11 @@ Document department membership uses the separate many-to-many model described in
 ### Query
 
 1. The API authenticates the caller and derives the tenant, department, and role authorization scope.
-2. It applies that scope before entity matching, lexical retrieval, and vector retrieval.
+2. It resolves exactly one active query profile and builds an immutable retrieval request with
+   mandatory tenant and department predicates derived only from the authenticated identity. An
+   optional text `filter` is carried to entity matching and lexical retrieval; it never changes
+   authorization scope. This preparation completes before any entity, lexical, or vector data is read.
+3. It applies that scope before entity matching, lexical retrieval, and vector retrieval.
 3. Query entities may add a document-level candidate or modest document-level boost. They do not select chunks or citations and are never a mandatory retrieval filter.
 4. It fuses lexical and vector chunk candidates with RRF, reranks them, then sends only selected authorized passages to the configured generation provider.
 5. The response includes the answer, evidence-confidence score, detected entities, and citations to the exact document version and passage.
