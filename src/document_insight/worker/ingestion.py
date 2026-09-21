@@ -21,7 +21,6 @@ from document_insight.infrastructure.configuration_snapshot.repository import (
 )
 from document_insight.infrastructure.database.session import get_session_factory
 from document_insight.infrastructure.database.transaction import SqlAlchemyTransactionManager
-from document_insight.infrastructure.document.repository import SqlAlchemyDocumentRepository
 from document_insight.infrastructure.document_chunker.page_window import (
     PageWindowDocumentChunkerFactory,
 )
@@ -75,7 +74,6 @@ async def _process(job_id: UUID) -> None:
     async with get_session_factory()() as session:
         await ProcessingService(
             SqlAlchemyJobRepository(session),
-            SqlAlchemyDocumentRepository(session),
             SqlAlchemyDocumentVersionRepository(session),
             SqlAlchemyExtractedDocumentRepository(session),
             SqlAlchemyEntityRepository(session),

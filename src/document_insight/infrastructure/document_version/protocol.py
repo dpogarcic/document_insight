@@ -61,7 +61,7 @@ class DocumentVersionRepository(Protocol):
         """Mark a version as terminally failed after a non-retryable error."""
 
     async def mark_ready(self, version_id: UUID) -> None:
-        """Mark a fully indexed version as ready for atomic promotion."""
+        """Mark a fully indexed version ready for explicit administrator activation."""
 
     async def is_newer_than(self, candidate_id: UUID, current_id: UUID) -> bool:
         """Compare immutable version numbers belonging to one logical document."""

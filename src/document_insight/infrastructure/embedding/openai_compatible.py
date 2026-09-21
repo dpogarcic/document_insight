@@ -65,8 +65,10 @@ class OpenAICompatibleTextEmbedder(TextEmbedder):
                 )
                 response.raise_for_status()
             payload = _EmbeddingResponse.model_validate(response.json())
+        except httpx.HTTPStatusError as error:
+            raise EmbeddingError(f"provider_rejected_http_{error.response.status_code}") from error
         except (httpx.HTTPError, ValidationError, ValueError) as error:
-            raise EmbeddingError from error
+            raise EmbeddingError("provider_response_invalid") from error
         ordered = sorted(payload.data, key=lambda item: item.index)
         if len(ordered) != len(texts) or tuple(item.index for item in ordered) != tuple(
             range(len(texts))

@@ -26,7 +26,8 @@ Build a Python-based AI Document Insight Platform for internal users.
 - Ingest PDFs and images through `POST /ingest`.
 - Store original uploads synchronously in S3-compatible object storage.
 - Queue only asynchronous processing: parsing/OCR, language detection, NER, chunking,
-  embedding, lexical indexing, and version promotion.
+  embedding, lexical indexing, and ready-state transitions. Activation is a separate
+  tenant-admin operation.
 - Provide `POST /query` with `question`, optional `filter`, and optional `top_k`.
 - Return an evidence-grounded answer, an evidence-confidence score, detected entities,
   and exact source citations.
@@ -95,9 +96,10 @@ Do not add optional stretch features unless the user explicitly requests them.
   must never create duplicate derived records.
 - Scope chunks, entities, embeddings, and citations to `document_version_id`, not only
   `document_id`.
-- Keep `current_ready_version_id` on the logical document. Do not replace the current
-  searchable version until a newer version fully reaches `ready`; never allow a slow,
-  older job to promote over a newer ready version.
+- Keep `current_ready_version_id` on the logical document. Processing may mark a version
+  `ready` but must never change this pointer. A future tenant-admin activation action
+  explicitly and atomically selects a ready version as current; until then, the existing
+  current version remains searchable.
 - The API returns `202 Accepted` only after the original file is stored and the job is
   accepted by RQ. Object writes are not worker work.
 - Preserve failure recovery: clean up orphaned objects, retain durable job state, and

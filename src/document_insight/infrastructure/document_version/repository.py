@@ -96,7 +96,7 @@ class SqlAlchemyDocumentVersionRepository(DocumentVersionRepository):
         )
 
     async def mark_ready(self, version_id: UUID) -> None:
-        """Mark one complete derived-data version ready for promotion."""
+        """Mark one complete derived-data version ready for later activation."""
         await self._session.execute(
             update(DocumentVersionModel)
             .where(DocumentVersionModel.id == version_id)

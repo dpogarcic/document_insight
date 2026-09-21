@@ -85,3 +85,7 @@ models:
   embedding:
     model: hf.co/vonjack/bge-m3-gguf:Q8_0
     context_size: 8192
+    runtime_flags:
+      - "--embeddings"
+      - "--pooling"
+      - "mean"

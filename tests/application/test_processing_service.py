@@ -1,5 +1,6 @@
 """Focused tests for durable parsing checkpoints and failure classification."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -60,7 +61,6 @@ class FakeVersions:
     processing: list[UUID] = field(default_factory=list)
     failed: list[UUID] = field(default_factory=list)
     ready: list[UUID] = field(default_factory=list)
-    document_id: UUID = field(default_factory=uuid4)
 
     async def mark_processing(self, version_id: UUID) -> None:
         self.processing.append(version_id)
@@ -71,28 +71,8 @@ class FakeVersions:
     async def mark_ready(self, version_id: UUID) -> None:
         self.ready.append(version_id)
 
-    async def get_document_id(self, _: UUID, __: UUID) -> UUID:
-        return self.document_id
-
-    async def is_newer_than(self, _: UUID, __: UUID) -> bool:
-        return True
-
     async def get_for_processing(self, _: UUID, __: UUID) -> ProcessingDocumentVersion:
         return self.version
-
-
-@dataclass
-class FakeDocuments:
-    current_ready_version_id: UUID | None = None
-
-    async def lock(self, _: UUID, __: UUID) -> bool:
-        return True
-
-    async def get_current_ready_version_id(self, _: UUID, __: UUID) -> UUID | None:
-        return self.current_ready_version_id
-
-    async def set_current_ready_version_id(self, _: UUID, __: UUID, version_id: UUID) -> None:
-        self.current_ready_version_id = version_id
 
 
 @dataclass
@@ -337,7 +317,6 @@ def service_for(
     versions = FakeVersions(
         ProcessingDocumentVersion(job.document_version_id, job.tenant_id, "object-key", media_type)
     )
-    logical_documents = FakeDocuments()
     jobs = FakeJobs(job)
     documents = FakeExtractedDocuments(existing=extracted, ner_complete=ner_complete)
     parser = FakeParser(parser_error)
@@ -357,7 +336,6 @@ def service_for(
     return (
         ProcessingService(
             jobs,
-            logical_documents,
             versions,
             documents,
             entities,
@@ -512,11 +490,14 @@ async def test_ner_failure_marks_job_and_version_failed() -> None:
 
 
 @pytest.mark.anyio
-async def test_embedding_failure_marks_job_and_version_failed() -> None:
+async def test_embedding_failure_marks_job_and_version_failed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Embedding provider failures persist only a stable, safe failure code."""
     service, jobs, versions, _, _, _, _, _, embeddings, embedder = service_for(
-        embedding_error=EmbeddingError()
+        embedding_error=EmbeddingError("provider_rejected_http_400")
     )
+    caplog.set_level(logging.ERROR, logger="document_insight.application.processing.service")
 
     await service.process(jobs.job.job_id)  # type: ignore[union-attr]
 
@@ -524,3 +505,4 @@ async def test_embedding_failure_marks_job_and_version_failed() -> None:
     assert embeddings.created == []
     assert jobs.failures == [(jobs.job.job_id, "embedding_failed")]  # type: ignore[union-attr]
     assert versions.failed == [jobs.job.document_version_id]  # type: ignore[union-attr]
+    assert "Embedding stage failed: provider_rejected_http_400" in caplog.text

@@ -70,7 +70,7 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
     async def set_current_ready_version_id(
         self, document_id: UUID, tenant_id: UUID, document_version_id: UUID
     ) -> None:
-        """Update only the logical document's searchable-version pointer."""
+        """Set a version as current; callers enforce explicit activation rules."""
         await self._session.execute(
             update(DocumentModel)
             .where(DocumentModel.id == document_id, DocumentModel.tenant_id == tenant_id)

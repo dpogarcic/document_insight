@@ -28,4 +28,4 @@ class DocumentRepository(Protocol):
     async def set_current_ready_version_id(
         self, document_id: UUID, tenant_id: UUID, document_version_id: UUID
     ) -> None:
-        """Promote one already-ready version as the document's searchable version."""
+        """Set one already-ready version as current during explicit activation."""

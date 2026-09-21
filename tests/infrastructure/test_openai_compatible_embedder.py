@@ -70,3 +70,21 @@ def test_embed_rejects_a_vector_with_the_wrong_profile_dimension() -> None:
         pass
     else:
         raise AssertionError("Expected an embedding dimension mismatch to be rejected")
+
+
+def test_embed_classifies_a_provider_rejection_without_logging_input() -> None:
+    """Provider errors become a safe code; their response body is not propagated."""
+    embedder = OpenAICompatibleTextEmbedder(
+        "http://model-runner/engines/v1",
+        None,
+        httpx.MockTransport(
+            lambda request: httpx.Response(400, request=request, json={"error": "ignored"})
+        ),
+    )
+
+    try:
+        asyncio.run(embedder.embed(("A document passage",), embedding_configuration()))
+    except EmbeddingError as error:
+        assert str(error) == "provider_rejected_http_400"
+    else:
+        raise AssertionError("Expected the provider rejection to be classified")

@@ -34,7 +34,7 @@ flowchart LR
 | Object storage | Holds immutable original document versions. |
 | PostgreSQL and pgvector | System of record for tenants, departments, users, logical documents, versions, jobs, chunks, entities, embeddings, and authorization metadata. |
 | Redis / RQ | Delivers asynchronous processing jobs; PostgreSQL remains authoritative for job state. |
-| Processing worker | Performs parsing/OCR, language detection, NER, chunking, embedding, lexical indexing, and version promotion. |
+| Processing worker | Performs parsing/OCR, language detection, NER, chunking, embedding, lexical indexing, and ready-state transitions. |
 | Retrieval and AI provider layer | Selects explicit providers and implements authorized hybrid retrieval, reranking, evidence-grounded generation, and citations. |
 
 ## Data flow
@@ -98,7 +98,9 @@ Document department membership uses the separate many-to-many model described in
    lexical index is not BM25. The worker then obtains profile-bound embeddings for every
    chunk through the configured OpenAI-compatible endpoint and persists them with the
    embedding profile that produced them.
-6. When processing succeeds, the worker promotes that version atomically only if it is newer than the document's current ready version. Until then, the prior ready version remains searchable.
+6. When processing succeeds, the worker marks that version `ready` but does not change the
+   document's current pointer. A future tenant-admin activation action atomically selects a
+   ready version as current; until then, the prior current version remains searchable.
 
 ### Job status
 

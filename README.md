@@ -12,8 +12,11 @@ contract are implemented. Local registration and login are connected to PostgreS
 Argon2 password hashing and short-lived signed JWT access tokens. Authenticated ingestion
 currently validates PDF, PNG, and JPEG uploads, stores immutable originals in local MinIO,
 and atomically persists document/version metadata with a durable processing job. The job
-is published to Redis/RQ, while its worker entry point is deliberately a no-op scaffold;
-OCR, indexing, query, and model providers are not connected yet.
+is published to Redis/RQ. The worker extracts PDF/image text, detects English or Croatian,
+enriches document metadata with NER, and stores citation-ready chunks with a PostgreSQL
+full-text lexical index. It also creates profile-bound embeddings through Docker Model
+Runner and marks completed versions ready for later administrator activation. Query remains
+contract-only.
 
 ## Planned capabilities
 
@@ -35,9 +38,10 @@ OCR, indexing, query, and model providers are not connected yet.
 - [ADR 001: Service boundaries](docs/adr/001-service-boundaries.md) - API, service
   boundaries, storage, provider configuration, and retrieval design.
 - [ADR 002: Async processing and versioning](docs/adr/002-async-processing.md) - jobs,
-  processing lifecycle, failures, and current-version promotion.
+  processing lifecycle, failures, readiness, and explicit version activation.
 - [ADR 003: Tenant isolation and security](docs/adr/003-tenant-isolation.md) - tenants,
   departments, roles, authorization, encryption, and auditing.
+- [ADR 004: Capability configuration profiles](docs/adr/004-capability-configuration-profiles.md) - immutable AI configuration, explicit activation, and compatible retrieval across profile generations.
 - [Code quality standards](docs/CODE_QUALITY.md) - typing, testing, coverage,
   documentation, security, and merge expectations.
 - [AI Tech Lead assignment](Tech_Assignment.pdf) - original project brief.
@@ -51,12 +55,22 @@ uv sync --group dev
 cp .env.example .env
 ```
 
-Start PostgreSQL, pgvector, Redis, and the local S3-compatible object store, then apply migrations:
+Start PostgreSQL, pgvector, Redis, the local S3-compatible object store, and the Docker
+Model Runner embedding dependency, then apply migrations. Docker Desktop 4.40+ with
+Docker Compose 2.38+ is required for Compose `models` support:
 
 ```bash
 docker compose up -d database redis object-storage object-storage-init
 uv run alembic upgrade head
 docker compose up -d worker
+```
+
+Docker Model Runner requires BGE-M3 to use embedding mode with mean pooling. Compose
+declares the required runtime flags. If the local runner has already cached this model,
+apply the embedding-mode configuration once before starting the worker:
+
+```bash
+docker model configure --mode embedding hf.co/vonjack/bge-m3-gguf:Q8_0 -- --pooling mean
 ```
 
 Start the API:
@@ -90,7 +104,14 @@ generated `job_id` only after the original and durable records are stored and RQ
 the job. PostgreSQL remains authoritative for lifecycle state; `enqueued_at` records
 successful queue publication. The worker parses PDFs and images into a durable,
 version-scoped extraction checkpoint, detects English or Croatian, and persists spaCy
-entity metadata. Chunking, embedding, indexing, and ready promotion remain deferred.
+entity metadata. It then creates deterministic page-aware chunks, including page and
+character offsets for exact citations, and PostgreSQL generates a `simple` full-text index
+for each chunk. This is a temporary lexical index, not BM25. The worker batches those
+chunks through Docker Model Runner's OpenAI-compatible embeddings endpoint, validates the
+profile-declared vector dimension, and stores vectors under the exact embedding profile.
+After all checkpoints succeed it marks the index generation, job, and version `ready`.
+It does not make the version searchable; a future tenant-admin activation action will
+atomically select a ready version as the document's current version.
 
 The worker image includes and uses local spaCy NER models for English (`en_core_web_sm`)
 and Croatian (`hr_core_news_sm`). The entity model holds deduplicated,

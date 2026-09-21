@@ -1,5 +1,6 @@
 """First durable stage of the background processing pipeline."""
 
+import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -25,7 +26,6 @@ from document_insight.infrastructure.chunk_embedding.protocol import (
     CreateChunkEmbeddings,
 )
 from document_insight.infrastructure.database.transaction import TransactionManager
-from document_insight.infrastructure.document.protocol import DocumentRepository
 from document_insight.infrastructure.document_chunker.protocol import DocumentChunkerFactory
 from document_insight.infrastructure.document_parser.protocol import DocumentParser
 from document_insight.infrastructure.document_version.protocol import DocumentVersionRepository
@@ -40,6 +40,8 @@ from document_insight.infrastructure.job.protocol import JobRepository
 from document_insight.infrastructure.ner.protocol import NamedEntityRecognizerFactory
 from document_insight.infrastructure.object_storage.protocol import OriginalObjectStorage
 
+logger = logging.getLogger(__name__)
+
 
 class ProcessingService:
     """Claim jobs and persist the idempotent parsing checkpoint."""
@@ -47,7 +49,6 @@ class ProcessingService:
     def __init__(
         self,
         jobs: JobRepository,
-        documents: DocumentRepository,
         document_versions: DocumentVersionRepository,
         extracted_documents: ExtractedDocumentRepository,
         entities: EntityRepository,
@@ -64,7 +65,6 @@ class ProcessingService:
         transactions: TransactionManager,
     ) -> None:
         self._jobs = jobs
-        self._documents = documents
         self._document_versions = document_versions
         self._extracted_documents = extracted_documents
         self._entities = entities
@@ -222,7 +222,16 @@ class ProcessingService:
                 )
             try:
                 embeddings = await self._embed_chunks(chunks_to_embed, profile.embedding)
-            except (EmbeddingError, ValueError):
+            except (EmbeddingError, ValueError) as error:
+                logger.exception(
+                    "Embedding stage failed: %s",
+                    str(error) or "profile_or_provider_error",
+                    extra={
+                        "job_id": str(job.job_id),
+                        "document_version_id": str(version.document_version_id),
+                        "error_code": "embedding_failed",
+                    },
+                )
                 await self._fail(job.job_id, version.document_version_id, "embedding_failed")
                 return
             async with self._transactions.begin():
@@ -239,9 +248,7 @@ class ProcessingService:
                     await self._index_generations.mark_embedding_complete(
                         job.index_generation_id, datetime.now(UTC)
                     )
-        await self._complete(
-            job.job_id, version.document_version_id, version.tenant_id, job.index_generation_id
-        )
+        await self._complete(job.job_id, version.document_version_id, job.index_generation_id)
 
     async def _embed_chunks(
         self,
@@ -268,24 +275,9 @@ class ProcessingService:
             await self._jobs.fail(job_id, error_code, datetime.now(UTC))
             await self._document_versions.mark_failed(version_id)
 
-    async def _complete(
-        self, job_id: UUID, version_id: UUID, tenant_id: UUID, index_generation_id: UUID
-    ) -> None:
-        """Atomically expose a fully indexed version without replacing a newer ready one."""
+    async def _complete(self, job_id: UUID, version_id: UUID, index_generation_id: UUID) -> None:
+        """Atomically finish processing without activating the ready version."""
         async with self._transactions.begin():
-            document_id = await self._document_versions.get_document_id(version_id, tenant_id)
-            if document_id is None or not await self._documents.lock(document_id, tenant_id):
-                await self._jobs.fail(job_id, "document_not_found", datetime.now(UTC))
-                return
             await self._document_versions.mark_ready(version_id)
-            current_ready_id = await self._documents.get_current_ready_version_id(
-                document_id, tenant_id
-            )
-            if current_ready_id is None or await self._document_versions.is_newer_than(
-                version_id, current_ready_id
-            ):
-                await self._documents.set_current_ready_version_id(
-                    document_id, tenant_id, version_id
-                )
             await self._index_generations.mark_ready(index_generation_id)
             await self._jobs.mark_ready(job_id, datetime.now(UTC))
