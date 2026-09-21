@@ -6,7 +6,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from document_insight.infrastructure.document.model import DocumentModel
-from document_insight.infrastructure.document.protocol import DocumentRepository
+from document_insight.infrastructure.document.protocol import DocumentRepository, StoredDocument
 
 
 class SqlAlchemyDocumentRepository(DocumentRepository):
@@ -25,6 +25,23 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
                 )
             )
             is not None
+        )
+
+    async def list_for_tenant(self, tenant_id: UUID) -> tuple[StoredDocument, ...]:
+        """List tenant-owned documents in newest-first order."""
+        rows = await self._session.scalars(
+            select(DocumentModel)
+            .where(DocumentModel.tenant_id == tenant_id)
+            .order_by(DocumentModel.created_at.desc())
+        )
+        return tuple(
+            StoredDocument(
+                document_id=document.id,
+                title=document.title,
+                current_ready_version_id=document.current_ready_version_id,
+                created_at=document.created_at,
+            )
+            for document in rows
         )
 
     async def lock(self, document_id: UUID, tenant_id: UUID) -> bool:

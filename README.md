@@ -92,6 +92,8 @@ tracebacks use the response ID, while work outside an HTTP request uses `-`.
 | `POST` | `/auth/register` | Provision a new tenant, General department, and tenant administrator | Implemented |
 | `POST` | `/auth/login` | Verify credentials and obtain a bearer token | Implemented |
 | `POST` | `/ingest` | Store a PDF/image, create its version, and enqueue a processing job | Implemented through queue publication |
+| `GET` | `/documents` | List documents and visible departments within the caller's authorization scope | Implemented |
+| `POST` | `/documents/{document_id}/activate` | Tenant-admin-only explicit selection of a ready searchable version | Implemented |
 | `GET` | `/jobs/{job_id}` | Read an authorized processing-job status | Implemented |
 | `POST` | `/query` | Query authorized documents with optional filters and `top_k` | Contract only |
 

@@ -11,8 +11,10 @@ from document_insight.application.ingestion.models import (
 )
 from document_insight.infrastructure.document_version.model import DocumentVersionModel
 from document_insight.infrastructure.document_version.protocol import (
+    ActivatableDocumentVersion,
     CreateDocumentVersion,
     DocumentVersionRepository,
+    LatestDocumentVersion,
     ProcessingDocumentVersion,
 )
 
@@ -41,6 +43,91 @@ class SqlAlchemyDocumentVersionRepository(DocumentVersionRepository):
             )
         )
         return document_id
+
+    async def list_latest_for_document_ids(
+        self, document_ids: tuple[UUID, ...], tenant_id: UUID
+    ) -> tuple[LatestDocumentVersion, ...]:
+        """Load the current highest number for each listed logical document."""
+        if not document_ids:
+            return ()
+        latest = (
+            select(
+                DocumentVersionModel.document_id,
+                func.max(DocumentVersionModel.version_number).label("version_number"),
+            )
+            .where(
+                DocumentVersionModel.tenant_id == tenant_id,
+                DocumentVersionModel.document_id.in_(document_ids),
+            )
+            .group_by(DocumentVersionModel.document_id)
+            .subquery()
+        )
+        versions = await self._session.scalars(
+            select(DocumentVersionModel)
+            .join(
+                latest,
+                (DocumentVersionModel.document_id == latest.c.document_id)
+                & (DocumentVersionModel.version_number == latest.c.version_number),
+            )
+            .order_by(DocumentVersionModel.created_at.desc())
+        )
+        return tuple(
+            LatestDocumentVersion(
+                document_id=version.document_id,
+                document_version_id=version.id,
+                version_number=version.version_number,
+                original_filename=version.original_filename,
+                status=DocumentVersionStatus(version.status),
+                created_at=version.created_at,
+            )
+            for version in versions
+        )
+
+    async def list_for_document_ids(
+        self, document_ids: tuple[UUID, ...], tenant_id: UUID
+    ) -> tuple[LatestDocumentVersion, ...]:
+        """Load immutable version history without crossing the tenant boundary."""
+        if not document_ids:
+            return ()
+        versions = await self._session.scalars(
+            select(DocumentVersionModel)
+            .where(
+                DocumentVersionModel.document_id.in_(document_ids),
+                DocumentVersionModel.tenant_id == tenant_id,
+            )
+            .order_by(
+                DocumentVersionModel.document_id,
+                DocumentVersionModel.version_number.desc(),
+            )
+        )
+        return tuple(
+            LatestDocumentVersion(
+                document_id=version.document_id,
+                document_version_id=version.id,
+                version_number=version.version_number,
+                original_filename=version.original_filename,
+                status=DocumentVersionStatus(version.status),
+                created_at=version.created_at,
+            )
+            for version in versions
+        )
+
+    async def get_for_activation(
+        self, document_version_id: UUID, tenant_id: UUID
+    ) -> ActivatableDocumentVersion | None:
+        """Load only the tenant-scoped state required to validate activation."""
+        version = await self._session.scalar(
+            select(DocumentVersionModel).where(
+                DocumentVersionModel.id == document_version_id,
+                DocumentVersionModel.tenant_id == tenant_id,
+            )
+        )
+        if version is None:
+            return None
+        return ActivatableDocumentVersion(
+            document_id=version.document_id,
+            status=DocumentVersionStatus(version.status),
+        )
 
     async def create(self, command: CreateDocumentVersion) -> None:
         """Create one immutable stored document version."""

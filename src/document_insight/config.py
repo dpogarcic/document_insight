@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     rq_ingestion_queue_name: str = "ingestion"
     embedding_base_url: str = "http://localhost:12434/engines/v1"
     embedding_api_key: SecretStr | None = None
+    cors_allowed_origins: tuple[str, ...] = (
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    )
 
 
 @lru_cache

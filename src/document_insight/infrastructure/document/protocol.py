@@ -1,7 +1,19 @@
 """Logical-document repository protocol."""
 
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
+
+
+@dataclass(frozen=True, slots=True)
+class StoredDocument:
+    """Logical-document data safe for application-layer authorization."""
+
+    document_id: UUID
+    title: str
+    current_ready_version_id: UUID | None
+    created_at: datetime
 
 
 class DocumentRepository(Protocol):
@@ -9,6 +21,9 @@ class DocumentRepository(Protocol):
 
     async def exists(self, document_id: UUID, tenant_id: UUID) -> bool:
         """Return whether a tenant owns the logical document."""
+
+    async def list_for_tenant(self, tenant_id: UUID) -> tuple[StoredDocument, ...]:
+        """List stable documents for one tenant without department authorization."""
 
     async def lock(self, document_id: UUID, tenant_id: UUID) -> bool:
         """Lock an existing logical document while allocating its next version."""

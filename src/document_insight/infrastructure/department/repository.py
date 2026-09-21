@@ -6,7 +6,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from document_insight.infrastructure.department.model import DepartmentModel
-from document_insight.infrastructure.department.protocol import DepartmentRepository
+from document_insight.infrastructure.department.protocol import (
+    DepartmentRecord,
+    DepartmentRepository,
+)
 
 
 class SqlAlchemyDepartmentRepository(DepartmentRepository):
@@ -30,5 +33,34 @@ class SqlAlchemyDepartmentRepository(DepartmentRepository):
                     DepartmentModel.tenant_id == tenant_id,
                     DepartmentModel.id.in_(department_ids),
                 )
+            )
+        )
+
+    async def list_by_ids(
+        self, tenant_id: UUID, department_ids: tuple[UUID, ...]
+    ) -> tuple[DepartmentRecord, ...]:
+        """Load display metadata for a tenant-scoped department set."""
+        if not department_ids:
+            return ()
+        departments = await self._session.scalars(
+            select(DepartmentModel)
+            .where(
+                DepartmentModel.tenant_id == tenant_id,
+                DepartmentModel.id.in_(department_ids),
+            )
+            .order_by(DepartmentModel.name)
+        )
+        return tuple(
+            DepartmentRecord(department_id=department.id, name=department.name)
+            for department in departments
+        )
+
+    async def list_all_ids(self, tenant_id: UUID) -> tuple[UUID, ...]:
+        """Return the complete tenant department set for an administrator scope."""
+        return tuple(
+            await self._session.scalars(
+                select(DepartmentModel.id)
+                .where(DepartmentModel.tenant_id == tenant_id)
+                .order_by(DepartmentModel.name)
             )
         )

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from document_insight.infrastructure.document_department.model import DocumentDepartmentModel
 from document_insight.infrastructure.document_department.protocol import (
+    DocumentDepartmentAssignment,
     DocumentDepartmentRepository,
 )
 
@@ -26,6 +27,26 @@ class SqlAlchemyDocumentDepartmentRepository(DocumentDepartmentRepository):
                     DocumentDepartmentModel.tenant_id == tenant_id,
                 )
             )
+        )
+
+    async def list_for_document_ids(
+        self, document_ids: tuple[UUID, ...], tenant_id: UUID
+    ) -> tuple[DocumentDepartmentAssignment, ...]:
+        """Load associations without allowing a caller to cross tenant scope."""
+        if not document_ids:
+            return ()
+        rows = await self._session.execute(
+            select(
+                DocumentDepartmentModel.document_id,
+                DocumentDepartmentModel.department_id,
+            ).where(
+                DocumentDepartmentModel.document_id.in_(document_ids),
+                DocumentDepartmentModel.tenant_id == tenant_id,
+            )
+        )
+        return tuple(
+            DocumentDepartmentAssignment(document_id=document_id, department_id=department_id)
+            for document_id, department_id in rows.tuples()
         )
 
     async def add_many(

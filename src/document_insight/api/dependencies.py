@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from document_insight.api.errors import raise_api_error
 from document_insight.application.auth.models import AuthorizationContext
 from document_insight.application.auth.service import AuthService
+from document_insight.application.documents.service import DocumentLibraryService
 from document_insight.application.ingestion.service import IngestionService
 from document_insight.application.jobs.service import JobService
 from document_insight.config import Settings, get_settings
@@ -164,4 +165,15 @@ def get_job_service(session: DatabaseSession) -> JobService:
         jobs=SqlAlchemyJobRepository(session),
         document_versions=SqlAlchemyDocumentVersionRepository(session),
         document_departments=SqlAlchemyDocumentDepartmentRepository(session),
+    )
+
+
+def get_document_library_service(session: DatabaseSession) -> DocumentLibraryService:
+    """Compose the authorization-safe document-library query service."""
+    return DocumentLibraryService(
+        documents=SqlAlchemyDocumentRepository(session),
+        departments=SqlAlchemyDepartmentRepository(session),
+        document_departments=SqlAlchemyDocumentDepartmentRepository(session),
+        document_versions=SqlAlchemyDocumentVersionRepository(session),
+        transactions=SqlAlchemyTransactionManager(session),
     )

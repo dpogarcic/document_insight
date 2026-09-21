@@ -10,6 +10,10 @@ from document_insight.application.auth.exceptions import (
     EmailAlreadyRegisteredError,
     InvalidCredentialsError,
 )
+from document_insight.application.documents.exceptions import (
+    DocumentActivationForbiddenError,
+    DocumentVersionNotReadyError,
+)
 from document_insight.application.ingestion.exceptions import (
     DocumentNotFoundError,
     DocumentTooLargeError,
@@ -92,6 +96,22 @@ def register_exception_handlers(app: FastAPI) -> None:
             status.HTTP_404_NOT_FOUND,
             "document_not_found",
             "The requested document was not found.",
+        )
+
+    @app.exception_handler(DocumentActivationForbiddenError)
+    async def handle_document_activation_forbidden(_: Request, __: Exception) -> JSONResponse:
+        return error_response(
+            status.HTTP_403_FORBIDDEN,
+            "document_activation_forbidden",
+            "Only a tenant administrator can activate a document version.",
+        )
+
+    @app.exception_handler(DocumentVersionNotReadyError)
+    async def handle_document_version_not_ready(_: Request, __: Exception) -> JSONResponse:
+        return error_response(
+            status.HTTP_409_CONFLICT,
+            "document_version_not_ready",
+            "Only a ready document version can be activated.",
         )
 
     @app.exception_handler(IngestionForbiddenError)

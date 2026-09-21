@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -356,6 +356,153 @@ async def test_ingest_existing_document_creates_next_immutable_version(
     assert versions[0].object_key != versions[1].object_key
     assert len(jobs) == 2
     assert {job.document_version_id for job in jobs} == {version.id for version in versions}
+
+
+@pytest.mark.anyio
+async def test_document_library_returns_authorized_documents_and_departments(
+    ingest_context: IngestContext,
+) -> None:
+    """The library exposes latest-version metadata and tenant department display names."""
+    created = await ingest_context.client.post(
+        "/ingest",
+        data={"department_ids": str(ingest_context.legal_department_id)},
+        files={"file": ("legal.pdf", b"%PDF-1.7\nlegal", "application/pdf")},
+    )
+    assert created.status_code == 202
+
+    response = await ingest_context.client.get("/documents")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["departments"] == [
+        {"department_id": str(ingest_context.general_department_id), "name": "General"},
+        {"department_id": str(ingest_context.legal_department_id), "name": "Legal"},
+    ]
+    assert body["documents"] == [
+        {
+            "document_id": created.json()["document_id"],
+            "title": "legal.pdf",
+            "departments": [
+                {"department_id": str(ingest_context.legal_department_id), "name": "Legal"}
+            ],
+            "current_ready_version_id": None,
+            "latest_version": {
+                "document_version_id": created.json()["document_version_id"],
+                "version_number": 1,
+                "original_filename": "legal.pdf",
+                "status": "stored",
+                "created_at": body["documents"][0]["latest_version"]["created_at"],
+            },
+            "versions": [
+                {
+                    "document_version_id": created.json()["document_version_id"],
+                    "version_number": 1,
+                    "original_filename": "legal.pdf",
+                    "status": "stored",
+                    "created_at": body["documents"][0]["latest_version"]["created_at"],
+                }
+            ],
+            "created_at": body["documents"][0]["created_at"],
+        }
+    ]
+
+
+@pytest.mark.anyio
+async def test_document_library_excludes_documents_outside_an_editor_department(
+    ingest_context: IngestContext,
+) -> None:
+    """A non-administrator cannot enumerate a document assigned only to another department."""
+    created = await ingest_context.client.post(
+        "/ingest",
+        data={"department_ids": str(ingest_context.legal_department_id)},
+        files={"file": ("legal.pdf", b"%PDF-1.7\nlegal", "application/pdf")},
+    )
+    assert created.status_code == 202
+    editor_token = await create_user_token(
+        ingest_context,
+        UserRole.EDITOR,
+        (ingest_context.general_department_id,),
+    )
+
+    response = await ingest_context.client.get(
+        "/documents",
+        headers={"Authorization": f"Bearer {editor_token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["documents"] == []
+    assert response.json()["departments"] == [
+        {"department_id": str(ingest_context.general_department_id), "name": "General"}
+    ]
+
+
+@pytest.mark.anyio
+async def test_tenant_admin_explicitly_activates_a_ready_document_version(
+    ingest_context: IngestContext,
+) -> None:
+    """A ready update becomes searchable only after the administrator selects it."""
+    created = await ingest_context.client.post(
+        "/ingest",
+        files={"file": ("guide.pdf", b"%PDF-1.7\ncontent", "application/pdf")},
+    )
+    assert created.status_code == 202
+    document_id = created.json()["document_id"]
+    version_id = created.json()["document_version_id"]
+    async with ingest_context.session_factory.begin() as session:
+        await session.execute(
+            update(DocumentVersionModel)
+            .where(DocumentVersionModel.id == UUID(version_id))
+            .values(status="ready")
+        )
+
+    response = await ingest_context.client.post(
+        f"/documents/{document_id}/activate",
+        json={"document_version_id": version_id},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "document_id": document_id,
+        "current_ready_version_id": version_id,
+    }
+    async with ingest_context.session_factory() as session:
+        document = await session.scalar(
+            select(DocumentModel).where(DocumentModel.id == UUID(document_id))
+        )
+    assert document is not None
+    assert document.current_ready_version_id == UUID(version_id)
+
+
+@pytest.mark.anyio
+async def test_document_activation_rejects_non_ready_versions_and_editors(
+    ingest_context: IngestContext,
+) -> None:
+    """Activation cannot accidentally expose a queued version or editor-selected version."""
+    created = await ingest_context.client.post(
+        "/ingest",
+        files={"file": ("guide.pdf", b"%PDF-1.7\ncontent", "application/pdf")},
+    )
+    document_id = created.json()["document_id"]
+    version_id = created.json()["document_version_id"]
+    not_ready = await ingest_context.client.post(
+        f"/documents/{document_id}/activate",
+        json={"document_version_id": version_id},
+    )
+    editor_token = await create_user_token(
+        ingest_context,
+        UserRole.EDITOR,
+        (ingest_context.general_department_id,),
+    )
+    forbidden = await ingest_context.client.post(
+        f"/documents/{document_id}/activate",
+        headers={"Authorization": f"Bearer {editor_token}"},
+        json={"document_version_id": version_id},
+    )
+
+    assert not_ready.status_code == 409
+    assert not_ready.json()["detail"]["code"] == "document_version_not_ready"
+    assert forbidden.status_code == 403
+    assert forbidden.json()["detail"]["code"] == "document_activation_forbidden"
 
 
 @pytest.mark.anyio

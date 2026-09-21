@@ -38,7 +38,7 @@ We will accept uploads quickly and process each immutable document version throu
 - The worker batches chunks through the configured OpenAI-compatible embedding adapter,
   validates the profile-declared vector dimension, and stores vectors with their exact
   profile-bound index generation. It then marks the version, index generation, and job
-  `ready`; activation remains a deliberately separate operation.
+  `ready`; activation remains a deliberately separate tenant-admin operation.
 - Authenticated callers can read `GET /jobs/{job_id}` only through their tenant and current
   document-department scope. Missing and unauthorized jobs both return `404`.
 
@@ -81,7 +81,10 @@ We will accept uploads quickly and process each immutable document version throu
 
 - A logical document has a `current_ready_version_id` pointer. Uploading `v2` does not change the pointer while `v2` is queued, processing, or merely `ready`; the existing current version remains searchable.
 - When a version becomes `ready`, the worker updates only its own state and the index-generation/job checkpoints. It never updates `current_ready_version_id`.
-- A future tenant-admin activation action will lock the logical document, verify that the selected version is ready and belongs to that document, then atomically update `current_ready_version_id`. That action is deliberately separate from ingestion and processing.
+- `POST /documents/{document_id}/activate` is a tenant-admin-only action. It locks the
+  logical document, verifies that the selected version is ready and belongs to that document,
+  then atomically updates `current_ready_version_id`. That action is deliberately separate
+  from ingestion and processing.
 - A failed or cancelled version is never eligible for activation. Previous versions remain immutable for audit and can be exposed through an explicit historical-version feature later, but default retrieval uses only `current_ready_version_id`.
 - Chunks, entities, embeddings, and citations are scoped to `document_version_id`. Chunk ordinals are unique only within a version and chunking configuration, so identical ordinal values across versions cannot clash.
 

@@ -99,8 +99,8 @@ Document department membership uses the separate many-to-many model described in
    chunk through the configured OpenAI-compatible endpoint and persists them with the
    embedding profile that produced them.
 6. When processing succeeds, the worker marks that version `ready` but does not change the
-   document's current pointer. A future tenant-admin activation action atomically selects a
-   ready version as current; until then, the prior current version remains searchable.
+   document's current pointer. A tenant administrator explicitly selects a ready version as
+   current through the document library; until then, the prior current version remains searchable.
 
 ### Job status
 

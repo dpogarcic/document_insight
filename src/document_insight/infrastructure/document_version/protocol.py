@@ -1,6 +1,7 @@
 """Document-version repository protocol and creation data."""
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -37,6 +38,26 @@ class ProcessingDocumentVersion:
     media_type: DocumentMediaType
 
 
+@dataclass(frozen=True, slots=True)
+class LatestDocumentVersion:
+    """Most recent immutable version displayed in the document library."""
+
+    document_id: UUID
+    document_version_id: UUID
+    version_number: int
+    original_filename: str
+    status: DocumentVersionStatus
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ActivatableDocumentVersion:
+    """Version ownership and lifecycle state needed for explicit activation."""
+
+    document_id: UUID
+    status: DocumentVersionStatus
+
+
 class DocumentVersionRepository(Protocol):
     """Persistence operations owned by immutable document versions."""
 
@@ -48,6 +69,21 @@ class DocumentVersionRepository(Protocol):
 
     async def get_document_id(self, version_id: UUID, tenant_id: UUID) -> UUID | None:
         """Return the logical document owning a tenant-scoped version."""
+
+    async def list_latest_for_document_ids(
+        self, document_ids: tuple[UUID, ...], tenant_id: UUID
+    ) -> tuple[LatestDocumentVersion, ...]:
+        """Return the newest version for each tenant-scoped logical document."""
+
+    async def list_for_document_ids(
+        self, document_ids: tuple[UUID, ...], tenant_id: UUID
+    ) -> tuple[LatestDocumentVersion, ...]:
+        """Return all immutable versions for a tenant-scoped document set, newest first."""
+
+    async def get_for_activation(
+        self, document_version_id: UUID, tenant_id: UUID
+    ) -> ActivatableDocumentVersion | None:
+        """Return tenant-scoped version ownership and status for activation validation."""
 
     async def get_for_processing(
         self, version_id: UUID, tenant_id: UUID
