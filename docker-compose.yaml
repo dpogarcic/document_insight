@@ -38,6 +38,8 @@ services:
   # Database service
   database:
     image: pgvector/pgvector:pg17
+    ports:
+      - "127.0.0.1:5432:5432"
     environment:
       - POSTGRES_USER=document_insight
       - POSTGRES_PASSWORD=document_insight

@@ -79,6 +79,7 @@ class RerankingConfiguration(BaseModel):
     model: str
     configuration_revision: str
     prompt_revision: str
+    system_prompt: str = Field(min_length=1, max_length=8_000)
     response_schema_revision: str
     temperature: Annotated[float, Field(ge=0.0, le=2.0)]
     max_output_tokens: Annotated[int, Field(ge=64, le=4_096)]
@@ -93,6 +94,8 @@ class GenerationConfiguration(BaseModel):
     model: str
     configuration_revision: str
     prompt_revision: str
+    system_prompt: str = Field(min_length=1, max_length=8_000)
+    correction_prompt: str = Field(min_length=1, max_length=2_000)
     response_schema_revision: str
     temperature: Annotated[float, Field(ge=0.0, le=2.0)]
     max_output_tokens: Annotated[int, Field(ge=64, le=4_096)]

@@ -42,6 +42,13 @@ contract-only.
 - [ADR 003: Tenant isolation and security](docs/adr/003-tenant-isolation.md) - tenants,
   departments, roles, authorization, encryption, and auditing.
 - [ADR 004: Capability configuration profiles](docs/adr/004-capability-configuration-profiles.md) - immutable AI configuration, explicit activation, and compatible retrieval across profile generations.
+
+Reranking and generation instructions are stored in fingerprinted capability snapshots.
+Migration `20260922_0011` creates prompt-bearing replacements and activates a new query
+profile only when the platform still uses the original seeded query profile. Installations
+with a custom active query profile must create and activate prompt-bearing capability and
+query profiles before running queries with this application version; an old snapshot with
+only `prompt_revision` is rejected at profile resolution.
 - [ADR 005: Observability](docs/adr/005-observability.md) - privacy-safe metrics, logs,
   dashboards, local Compose monitoring, and production operational controls.
 - [Code quality standards](docs/CODE_QUALITY.md) - typing, testing, coverage,

@@ -37,6 +37,12 @@ active profile pointer stored in PostgreSQL may do that.
   explicit provider key, model identifier, configuration revision, vector dimension,
   normalization, and prefixes for embeddings; and model, input limit, and
   score-normalization policy for reranking.
+- Reranking and generation snapshots contain the complete system instructions used by the
+  model, including generation's citation-correction instruction. A prompt revision label
+  alone does not select prompt text. Prompt text is included in the snapshot fingerprint;
+  changing it requires a new capability profile and an explicitly selected query profile.
+  Prompt text may guide the model but cannot override authorization, evidence thresholds,
+  structured response validation, or citation checks enforced by application code.
 - URLs, secrets, bearer tokens, API keys, passwords, secret identifiers, and connection
   references never appear in snapshots or their fingerprints. An adapter resolves its
   provider-specific endpoint and credentials from runtime settings using the profile's
@@ -83,8 +89,9 @@ The processing worker assigns an ingestion profile and index generation at uploa
 resolves persisted NER, chunking, and embedding snapshots when it processes the job. Mistral
 supplies cloud embeddings; the snapshot records its model identifier, configuration revision,
 dimensions, normalization, and batch size. Mistral chat models are selected independently for
-structured LLM reranking and grounded generation, whose snapshots also record prompt,
-response-schema, temperature, and output-token revisions. The OpenAI Agents SDK is used only
+structured LLM reranking and grounded generation, whose snapshots also record full system
+instructions, prompt and response-schema revisions, temperature, and output-token limits.
+The OpenAI Agents SDK is used only
 for those chat tasks with tracing disabled, so document passages are not exported to tracing.
 
 ### Index generations and compatibility

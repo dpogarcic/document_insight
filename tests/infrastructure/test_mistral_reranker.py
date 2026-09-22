@@ -9,19 +9,25 @@ from document_insight.infrastructure.reranker.protocol import RerankInput
 
 
 class _FakeAgentClient:
-    async def complete(self, **_: object) -> _Response:
+    def __init__(self) -> None:
+        self.instructions: list[str] = []
+
+    async def complete(self, **kwargs: object) -> _Response:
+        self.instructions.append(str(kwargs["instructions"]))
         return _Response(scores=(0.9, 0.2))
 
 
 def test_reranker_attaches_ordered_scores_to_authorized_chunk_ids() -> None:
     """The model never needs to reproduce opaque chunk identifiers."""
     first_id, second_id = uuid4(), uuid4()
-    reranker = MistralReranker(_FakeAgentClient())  # type: ignore[arg-type]
+    client = _FakeAgentClient()
+    reranker = MistralReranker(client)  # type: ignore[arg-type]
     configuration = RerankingConfiguration(
         provider="mistral",
         model="ministral-3b-2512",
         configuration_revision="ministral-3b-2512",
         prompt_revision="llm-rerank-v2",
+        system_prompt="Profile reranking instructions.",
         response_schema_revision="rerank-scores-v2",
         temperature=0.0,
         max_output_tokens=2048,
@@ -39,3 +45,4 @@ def test_reranker_attaches_ordered_scores_to_authorized_chunk_ids() -> None:
         (first_id, 0.9),
         (second_id, 0.2),
     )
+    assert client.instructions == ["Profile reranking instructions."]

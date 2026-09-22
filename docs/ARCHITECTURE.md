@@ -168,6 +168,11 @@ transition, queries search explicitly enabled compatible cohorts separately and 
 ranked results rather than comparing scores across incompatible vector spaces. See ADR 004
 for the profile, activation, and audit model.
 
+Reranking and generation system instructions are part of their immutable capability
+snapshots and are supplied to the model from the resolved query profile. Prompt edits
+therefore create new profile versions. Authorization, evidence selection, structured
+response validation, and citation checks remain application-enforced safeguards.
+
 ## Deployment position
 
 ### Current commitment
