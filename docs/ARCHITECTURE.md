@@ -18,6 +18,8 @@ flowchart LR
     API -->|document, version, job| DB[(PostgreSQL + pgvector)]
     API -->|enqueue processing job| Q[(Redis / RQ)]
     Q --> W[Processing worker]
+    RC[Job reconciler] -->|republish durable work| Q
+    RC --> DB
     W --> OBJ
     W --> DB
     API --> R[Retrieval and AI provider layer]
@@ -35,6 +37,7 @@ flowchart LR
 | PostgreSQL and pgvector | System of record for tenants, departments, users, logical documents, versions, jobs, chunks, entities, embeddings, and authorization metadata. |
 | Redis / RQ | Delivers asynchronous processing jobs; PostgreSQL remains authoritative for job state. |
 | Processing worker | Performs parsing/OCR, language detection, NER, chunking, embedding, lexical indexing, and ready-state transitions. |
+| Job reconciler | Periodically recovers durable jobs that Redis did not receive, stale transient processing jobs, and retryable transient failures. It never retries permanent failures or exhausted jobs. |
 | Retrieval and AI provider layer | Selects explicit providers and implements authorized hybrid retrieval, reranking, evidence-grounded generation, and citations. |
 
 ## Data flow
@@ -102,6 +105,17 @@ Document department membership uses the separate many-to-many model described in
    document's current pointer. A tenant administrator explicitly selects a ready version as
    current through the document library; until then, the prior current version remains searchable.
 
+### Processing-job recovery
+
+1. The reconciler runs as a private worker process on a configurable interval (60 seconds by
+   default) and treats PostgreSQL—not Redis—as the authoritative job ledger.
+2. It republishes jobs that were never recorded as enqueued or whose queued delivery became
+   stale, recovers stale `processing` jobs within their retry budget, and requeues only failed
+   jobs explicitly classified as transient.
+3. Stale jobs that have exhausted the retry budget become terminal failures. Permanent failures
+   are never auto-retried. The worker atomically claims only `queued` jobs, so duplicate queue
+   messages cannot process a document version concurrently.
+
 ### Job status
 
 1. `GET /jobs/{job_id}` authenticates the caller and applies tenant and current document
@@ -153,7 +167,8 @@ for the profile, activation, and audit model.
 ### Current commitment
 
 - Every component runs in a container.
-- Docker Compose starts the local API, worker, PostgreSQL/search extensions, Redis, and object storage.
+- Docker Compose starts the local API, processing worker, job reconciler, PostgreSQL/search
+  extensions, Redis, and object storage.
 - Configuration and secrets are external to application code.
 - The public API is stateless; workers can scale independently when a suitable runtime is selected.
 

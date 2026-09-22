@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, ge=10 * 1024 * 1024)
     redis_url: str = "redis://localhost:6379/0"
     rq_ingestion_queue_name: str = "ingestion"
+    job_reconciliation_interval_seconds: int = Field(default=60, ge=5, le=3600)
     mistral_base_url: str = "https://api.mistral.ai/v1"
     mistral_api_key: SecretStr | None = None
     cors_allowed_origins: tuple[str, ...] = (

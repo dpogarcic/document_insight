@@ -67,7 +67,11 @@ We will accept uploads quickly and process each immutable document version throu
 - The system stores a SHA-256 content digest as provenance. A repeated upload is still a new version when the document-library UI supplies the document ID; the digest may later support safe processing optimization, but it does not alter versioning semantics.
 - Each worker step is retry-safe. Derived rows use unique keys containing `document_version_id`, chunk ordinal, and the embedding/index configuration version.
 - Workers use bounded retries with exponential backoff for retryable dependencies. Attempts, timestamps, error category, and correlation ID are persisted.
-- A periodic reconciliation task finds stale `processing` jobs and retries or fails them according to the retry policy.
+- A periodic reconciliation process uses PostgreSQL as the source of truth to republish
+  unqueued or stale queued work, recover stale `processing` jobs within their retry budget,
+  and requeue only transient failed jobs. It marks stale jobs that exhausted their retry
+  budget as terminal failures. Queue delivery is idempotent: the worker claims only
+  `queued` jobs, so duplicate Redis messages cannot run the same job concurrently.
 - If synchronous object storage succeeds but the database transaction fails, the API attempts immediate object deletion and records the key for reconciliation if deletion fails. If RQ is unavailable after the job is committed, the job remains durable as `queued`, a reconciliation process republishes it, and the API returns a retryable error rather than a successful acceptance response.
 
 ### Versioning and provenance

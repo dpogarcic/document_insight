@@ -98,7 +98,7 @@ services:
     build: .
     image: document-insight-worker:latest
     command: >
-      uv run --no-sync rq worker --url redis://redis:6379/0 ingestion
+      uv run --no-sync rq worker --with-scheduler --url redis://redis:6379/0 ingestion
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
       REDIS_URL: ${REDIS_URL:?Set REDIS_URL in .env}
@@ -118,6 +118,24 @@ services:
         condition: service_healthy
       object-storage-init:
         condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+
+  reconciler:
+    build: .
+    image: document-insight-worker:latest
+    command: uv run --no-sync python -m document_insight.worker.reconciler
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      REDIS_URL: ${REDIS_URL:?Set REDIS_URL in .env}
+      RQ_INGESTION_QUEUE_NAME: ingestion
+      JOB_RECONCILIATION_INTERVAL_SECONDS: ${JOB_RECONCILIATION_INTERVAL_SECONDS:-60}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
 

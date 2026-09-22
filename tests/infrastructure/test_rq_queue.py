@@ -1,6 +1,7 @@
 """Unit tests for Redis Queue delivery and its inert worker entry point."""
 
 import logging
+from datetime import UTC, datetime
 from unittest.mock import Mock
 from uuid import uuid4
 
@@ -41,6 +42,29 @@ async def test_rq_queue_translates_connection_failures() -> None:
 
     with pytest.raises(QueueUnavailableError):
         await processing_queue.enqueue_ingestion(uuid4(), uuid4())
+
+
+@pytest.mark.anyio
+async def test_rq_queue_schedules_retry_at_the_durable_retry_time() -> None:
+    """Delayed retries use RQ's scheduler API rather than passing timing as job data."""
+    processing_queue = RqProcessingQueue("redis://localhost:6379/0", "ingestion")
+    enqueue_at = Mock()
+    processing_queue._queue.enqueue_at = enqueue_at
+    job_id = uuid4()
+    correlation_id = uuid4()
+    retry_at = datetime(2026, 9, 22, 12, 0, tzinfo=UTC)
+
+    await processing_queue.re_enqueue_for_retry(job_id, correlation_id, retry_at)
+
+    enqueue_at.assert_called_once_with(
+        retry_at,
+        "document_insight.worker.ingestion.process_ingestion_job",
+        str(job_id),
+        str(correlation_id),
+        job_id=str(job_id),
+        description=f"Retry ingestion job {job_id} at {retry_at}",
+        result_ttl=0,
+    )
 
 
 def test_worker_entry_point_runs_the_parsing_workflow(

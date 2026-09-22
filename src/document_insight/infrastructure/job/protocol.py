@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from document_insight.application.jobs.models import JobRecord, ProcessingJob
+from document_insight.application.jobs.models import JobRecord, ProcessingJob, RequeueJob
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,3 +62,18 @@ class JobRepository(Protocol):
         Updates the job to queuing state with retry timing metadata so the
         reconciliation process or a scheduled retry can resume it.
         """
+
+    async def list_requeue_candidates(
+        self, now: datetime, stale_before: datetime, max_attempts: int, limit: int
+    ) -> tuple[RequeueJob, ...]:
+        """Return a bounded set of durable jobs that may need queue recovery."""
+
+    async def prepare_for_requeue(
+        self, job_id: UUID, now: datetime, stale_before: datetime, max_attempts: int
+    ) -> RequeueJob | None:
+        """Atomically make one eligible job ready for another queue publication."""
+
+    async def fail_stale_exhausted(
+        self, now: datetime, stale_before: datetime, max_attempts: int
+    ) -> tuple[UUID, ...]:
+        """Fail stale in-progress jobs that have exhausted their retry budget."""

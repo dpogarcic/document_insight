@@ -110,10 +110,15 @@ normalized to the canonical `PERSON` label; broad or numeric labels such as `MIS
 `CARDINAL` are discarded. Chunks, rather than entities, retain the grounding used for
 passage retrieval and citations.
 
-The Compose `worker` service consumes the `ingestion` RQ queue. Follow its output with:
+The Compose `worker` service consumes the `ingestion` RQ queue and starts RQ's delayed-job
+scheduler. The `reconciler` service runs every `JOB_RECONCILIATION_INTERVAL_SECONDS`
+(60 seconds by default). PostgreSQL remains authoritative: it republishes unqueued or stale
+queued work, resumes stale processing jobs within their retry budget, and retries only
+transient failed jobs. Permanent parser failures and exhausted jobs remain terminal.
+Follow either worker's output with:
 
 ```bash
-docker compose logs -f worker
+docker compose logs -f worker reconciler
 ```
 
 Run the current checks with:

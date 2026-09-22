@@ -59,6 +59,15 @@ class ProcessingJob:
 
 
 @dataclass(frozen=True, slots=True)
+class RequeueJob:
+    """Safe queue payload recovered from durable processing-job state."""
+
+    job_id: UUID
+    correlation_id: UUID
+    document_version_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
 class Job:
     """Authorized processing state of one document-version job."""
 

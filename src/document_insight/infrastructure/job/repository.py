@@ -3,10 +3,10 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from document_insight.application.jobs.models import JobRecord, JobStatus, ProcessingJob
+from document_insight.application.jobs.models import JobRecord, JobStatus, ProcessingJob, RequeueJob
 from document_insight.infrastructure.job.model import JobModel
 from document_insight.infrastructure.job.protocol import CreateJob, JobRepository
 
@@ -67,11 +67,12 @@ class SqlAlchemyJobRepository(JobRepository):
             update(JobModel)
             .where(
                 JobModel.id == job_id,
-                JobModel.status.in_((JobStatus.QUEUED.value, JobStatus.PROCESSING.value)),
+                JobModel.status == JobStatus.QUEUED.value,
             )
             .values(
                 status=JobStatus.PROCESSING.value,
                 started_at=started_at,
+                next_retry_at=None,
                 attempt_count=JobModel.attempt_count + 1,
             )
             .returning(
@@ -149,3 +150,105 @@ class SqlAlchemyJobRepository(JobRepository):
                 last_attempt_at=datetime.now(UTC),
             )
         )
+
+    async def list_requeue_candidates(
+        self, now: datetime, stale_before: datetime, max_attempts: int, limit: int
+    ) -> tuple[RequeueJob, ...]:
+        """Find bounded transient or orphaned work without trusting Redis state."""
+        recoverable = or_(
+            and_(
+                JobModel.status == JobStatus.QUEUED.value,
+                or_(
+                    JobModel.enqueued_at.is_(None),
+                    JobModel.next_retry_at <= now,
+                    JobModel.enqueued_at <= stale_before,
+                ),
+            ),
+            and_(
+                JobModel.status == JobStatus.PROCESSING.value,
+                JobModel.started_at <= stale_before,
+                JobModel.attempt_count < max_attempts,
+            ),
+            and_(
+                JobModel.status == JobStatus.FAILED.value,
+                JobModel.error_category == "transient",
+                JobModel.attempt_count < max_attempts,
+            ),
+        )
+        rows = (
+            await self._session.execute(
+                select(
+                    JobModel.id,
+                    JobModel.correlation_id,
+                    JobModel.document_version_id,
+                )
+                .where(recoverable)
+                .order_by(JobModel.created_at)
+                .limit(limit)
+            )
+        ).all()
+        return tuple(
+            RequeueJob(row.id, row.correlation_id, row.document_version_id) for row in rows
+        )
+
+    async def prepare_for_requeue(
+        self, job_id: UUID, now: datetime, stale_before: datetime, max_attempts: int
+    ) -> RequeueJob | None:
+        """Claim recovery responsibility before publishing to Redis again."""
+        recoverable = or_(
+            and_(
+                JobModel.status == JobStatus.QUEUED.value,
+                or_(
+                    JobModel.enqueued_at.is_(None),
+                    JobModel.next_retry_at <= now,
+                    JobModel.enqueued_at <= stale_before,
+                ),
+            ),
+            and_(
+                JobModel.status == JobStatus.PROCESSING.value,
+                JobModel.started_at <= stale_before,
+                JobModel.attempt_count < max_attempts,
+            ),
+            and_(
+                JobModel.status == JobStatus.FAILED.value,
+                JobModel.error_category == "transient",
+                JobModel.attempt_count < max_attempts,
+            ),
+        )
+        result = await self._session.execute(
+            update(JobModel)
+            .where(JobModel.id == job_id, recoverable)
+            .values(
+                status=JobStatus.QUEUED.value,
+                enqueued_at=None,
+                next_retry_at=None,
+                finished_at=None,
+            )
+            .returning(JobModel.id, JobModel.correlation_id, JobModel.document_version_id)
+        )
+        row = result.one_or_none()
+        if row is None:
+            return None
+        return RequeueJob(row.id, row.correlation_id, row.document_version_id)
+
+    async def fail_stale_exhausted(
+        self, now: datetime, stale_before: datetime, max_attempts: int
+    ) -> tuple[UUID, ...]:
+        """Make exhausted stale workers terminal instead of leaving them processing forever."""
+        result = await self._session.execute(
+            update(JobModel)
+            .where(
+                JobModel.status == JobStatus.PROCESSING.value,
+                JobModel.started_at <= stale_before,
+                JobModel.attempt_count >= max_attempts,
+            )
+            .values(
+                status=JobStatus.FAILED.value,
+                error_code="max_attempts_reached",
+                error_category="permanent",
+                failure_reason="stale_processing_exhausted",
+                finished_at=now,
+            )
+            .returning(JobModel.document_version_id)
+        )
+        return tuple(row.document_version_id for row in result)

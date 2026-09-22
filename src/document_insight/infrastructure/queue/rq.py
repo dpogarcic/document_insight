@@ -1,7 +1,7 @@
 """Redis Queue adapter for durable ingestion jobs."""
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import datetime
 from uuid import UUID
 
 from redis import Redis
@@ -42,14 +42,14 @@ class RqProcessingQueue(ProcessingQueue):
         """Re-enqueue a job that failed transiently, scheduled for retry."""
         try:
             await asyncio.to_thread(
-                self._queue.enqueue,
+                self._queue.enqueue_at,
+                next_retry_at,
                 _INGESTION_WORKER_FUNCTION,
                 str(job_id),
                 str(correlation_id),
                 job_id=str(job_id),
                 description=f"Retry ingestion job {job_id} at {next_retry_at}",
                 result_ttl=0,
-                at=next_retry_at,
             )
         except (OSError, RedisError) as error:
             raise QueueUnavailableError from error
