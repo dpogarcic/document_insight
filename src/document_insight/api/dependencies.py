@@ -14,10 +14,17 @@ from document_insight.application.auth.service import AuthService
 from document_insight.application.documents.service import DocumentLibraryService
 from document_insight.application.ingestion.service import IngestionService
 from document_insight.application.jobs.service import JobService
+from document_insight.application.query.profile_resolver import QueryProfileResolver
 from document_insight.application.query.service import QueryPreparationService
 from document_insight.config import Settings, get_settings
 from document_insight.infrastructure.active_profile.repository import (
     SqlAlchemyActiveProfileRepository,
+)
+from document_insight.infrastructure.capability_profile.repository import (
+    SqlAlchemyCapabilityProfileRepository,
+)
+from document_insight.infrastructure.configuration_snapshot.repository import (
+    SqlAlchemyConfigurationSnapshotRepository,
 )
 from document_insight.infrastructure.database.session import get_db_session
 from document_insight.infrastructure.database.transaction import (
@@ -33,15 +40,21 @@ from document_insight.infrastructure.document_department.repository import (
 from document_insight.infrastructure.document_version.repository import (
     SqlAlchemyDocumentVersionRepository,
 )
+from document_insight.infrastructure.generation.mistral import MistralGroundedAnswerGeneratorFactory
 from document_insight.infrastructure.index_generation.repository import (
     SqlAlchemyIndexGenerationRepository,
 )
 from document_insight.infrastructure.job.repository import SqlAlchemyJobRepository
+from document_insight.infrastructure.mistral.embedding import MistralTextEmbedderFactory
 from document_insight.infrastructure.object_storage.s3 import S3OriginalObjectStorage
 from document_insight.infrastructure.query_profile.repository import (
     SqlAlchemyQueryProfileRepository,
 )
 from document_insight.infrastructure.queue.rq import RqProcessingQueue
+from document_insight.infrastructure.reranker.mistral import MistralRerankerFactory
+from document_insight.infrastructure.retrieval.repository import (
+    SqlAlchemyAuthorizedRetrievalRepository,
+)
 from document_insight.infrastructure.security.password_hasher import Argon2PasswordHasher
 from document_insight.infrastructure.security.token_authenticator import JwtTokenAuthenticator
 from document_insight.infrastructure.security.token_issuer import JwtTokenIssuer
@@ -141,6 +154,13 @@ def get_processing_queue(settings: ApplicationSettings) -> RqProcessingQueue:
 ProcessingQueue = Annotated[RqProcessingQueue, Depends(get_processing_queue)]
 
 
+def _mistral_api_key(settings: Settings) -> str:
+    """Return the required cloud credential only when an AI capability is composed."""
+    if settings.mistral_api_key is None:
+        raise RuntimeError("MISTRAL_API_KEY must be configured for AI capabilities")
+    return settings.mistral_api_key.get_secret_value()
+
+
 def get_ingestion_service(
     session: DatabaseSession,
     settings: ApplicationSettings,
@@ -183,10 +203,29 @@ def get_document_library_service(session: DatabaseSession) -> DocumentLibrarySer
     )
 
 
-def get_query_preparation_service(session: DatabaseSession) -> QueryPreparationService:
-    """Compose authorization and immutable-profile setup before retrieval begins."""
+def get_query_preparation_service(
+    session: DatabaseSession, settings: ApplicationSettings
+) -> QueryPreparationService:
+    """Compose the complete profile-bound, authorization-safe RAG workflow."""
     return QueryPreparationService(
         active_profiles=SqlAlchemyActiveProfileRepository(session),
-        query_profiles=SqlAlchemyQueryProfileRepository(session),
+        profile_resolver=QueryProfileResolver(
+            SqlAlchemyQueryProfileRepository(session),
+            SqlAlchemyCapabilityProfileRepository(session),
+            SqlAlchemyConfigurationSnapshotRepository(session),
+        ),
         departments=SqlAlchemyDepartmentRepository(session),
+        retrieval=SqlAlchemyAuthorizedRetrievalRepository(session),
+        embedders=MistralTextEmbedderFactory(
+            settings.mistral_base_url,
+            _mistral_api_key(settings),
+        ),
+        rerankers=MistralRerankerFactory(
+            settings.mistral_base_url,
+            _mistral_api_key(settings),
+        ),
+        generators=MistralGroundedAnswerGeneratorFactory(
+            settings.mistral_base_url,
+            _mistral_api_key(settings),
+        ),
     )

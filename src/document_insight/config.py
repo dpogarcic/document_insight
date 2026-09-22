@@ -32,8 +32,8 @@ class Settings(BaseSettings):
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, ge=10 * 1024 * 1024)
     redis_url: str = "redis://localhost:6379/0"
     rq_ingestion_queue_name: str = "ingestion"
-    embedding_base_url: str = "http://localhost:12434/engines/v1"
-    embedding_api_key: SecretStr | None = None
+    mistral_base_url: str = "https://api.mistral.ai/v1"
+    mistral_api_key: SecretStr | None = None
     cors_allowed_origins: tuple[str, ...] = (
         "http://localhost:3000",
         "http://127.0.0.1:3000",

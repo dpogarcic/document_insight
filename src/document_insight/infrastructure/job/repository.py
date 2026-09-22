@@ -1,6 +1,6 @@
 """SQLAlchemy adapter for authorized processing-job status reads."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select, update
@@ -81,6 +81,7 @@ class SqlAlchemyJobRepository(JobRepository):
                 JobModel.correlation_id,
                 JobModel.ingestion_profile_id,
                 JobModel.index_generation_id,
+                JobModel.attempt_count,
             )
         )
         row = result.one_or_none()
@@ -93,9 +94,17 @@ class SqlAlchemyJobRepository(JobRepository):
             correlation_id=row.correlation_id,
             ingestion_profile_id=row.ingestion_profile_id,
             index_generation_id=row.index_generation_id,
+            attempt_count=row.attempt_count,
         )
 
-    async def fail(self, job_id: UUID, error_code: str, finished_at: datetime) -> None:
+    async def fail(
+        self,
+        job_id: UUID,
+        error_code: str,
+        finished_at: datetime,
+        error_category: str = "permanent",
+        failure_reason: str | None = None,
+    ) -> None:
         """Persist a safe terminal parser error without exception details."""
         await self._session.execute(
             update(JobModel)
@@ -104,6 +113,8 @@ class SqlAlchemyJobRepository(JobRepository):
                 status=JobStatus.FAILED.value,
                 error_code=error_code,
                 finished_at=finished_at,
+                error_category=error_category,
+                failure_reason=failure_reason,
             )
         )
 
@@ -113,4 +124,28 @@ class SqlAlchemyJobRepository(JobRepository):
             update(JobModel)
             .where(JobModel.id == job_id)
             .values(status=JobStatus.READY.value, error_code=None, finished_at=finished_at)
+        )
+
+    async def retry(
+        self,
+        job_id: UUID,
+        attempt_count: int,
+        next_retry_at: datetime,
+        error_category: str = "transient",
+    ) -> None:
+        """Schedule a transient failure for retry with exponential backoff.
+
+        Sets the job back to queued state with retry timing metadata so the
+        reconciliation process or a scheduled retry can resume it.
+        """
+        await self._session.execute(
+            update(JobModel)
+            .where(JobModel.id == job_id)
+            .values(
+                status=JobStatus.QUEUED.value,
+                attempt_count=attempt_count,
+                error_category=error_category,
+                next_retry_at=next_retry_at,
+                last_attempt_at=datetime.now(UTC),
+            )
         )

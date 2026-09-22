@@ -39,6 +39,10 @@ class JobRecord:
     created_at: datetime
     updated_at: datetime
     error_code: str | None
+    error_category: str | None = None
+    failure_reason: str | None = None
+    last_attempt_at: datetime | None = None
+    next_retry_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +55,7 @@ class ProcessingJob:
     correlation_id: UUID
     ingestion_profile_id: UUID | None
     index_generation_id: UUID | None
+    attempt_count: int
 
 
 @dataclass(frozen=True, slots=True)

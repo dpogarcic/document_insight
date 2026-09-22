@@ -69,9 +69,9 @@ Do not add optional stretch features unless the user explicitly requests them.
   chunking, lexical, embedding, reranking, or generation configuration implicitly. Jobs
   and index generations use their persisted ingestion profile; queries use one query
   profile resolved at request start. See ADR 004.
-- Initial model plan: a BGE embedding model and a generation model, both through the
-  `openai_compatible` provider protocol. Provider protocols must make alternate supported
-  implementations possible.
+- Initial model plan: Mistral Embed for embeddings plus Mistral-hosted LLMs for reranking and
+  generation, selected through explicit `mistral` provider profiles. Provider protocols must make
+  alternate supported implementations possible.
 - Retrieval is hybrid. Lexical and vector retrieval must receive identical authorization
   filters, candidates are fused with RRF, then reranked before `top_k` is applied.
 - True BM25 requires a chosen lexical implementation. `pg_search` is a candidate under

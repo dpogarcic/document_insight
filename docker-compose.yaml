@@ -1,26 +1,61 @@
 services:
+  # Main application service
+  app:
+    build: .
+    image: document-insight-app:latest
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://document_insight:document_insight@database:5432/document_insight
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:?Set MISTRAL_API_KEY in .env}
+      - S3_ENDPOINT_URL=http://object-storage:9000
+      - REDIS_URL=redis://redis:6379/0
+      - RQ_INGESTION_QUEUE_NAME=ingestion
+    depends_on:
+      - database
+      - redis
+      - object-storage
+    volumes:
+      - ./src:/app/src
+    command: >
+      uv run --no-sync uvicorn --host 0.0.0.0 --port 8000 "src.document_insight.api.app:app"
+
+  # Database service
   database:
     image: pgvector/pgvector:pg17
     environment:
-      POSTGRES_DB: document_insight
-      POSTGRES_USER: document_insight
-      POSTGRES_PASSWORD: document_insight
-    ports:
-      - "5432:5432"
+      - POSTGRES_USER=document_insight
+      - POSTGRES_PASSWORD=document_insight
+      - POSTGRES_DB=document_insight
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U document_insight -d document_insight"]
       interval: 5s
       timeout: 5s
       retries: 10
 
+  # Redis service
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Object Storage service (S3-compatible)
   object-storage:
     image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: document-insight
-      MINIO_ROOT_PASSWORD: document-insight-local-only
+      - MINIO_ROOT_USER=document-insight
+      - MINIO_ROOT_PASSWORD=document-insight-local-only
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -32,6 +67,7 @@ services:
       timeout: 5s
       retries: 10
 
+  # Object Storage initialization service
   object-storage-init:
     image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
     depends_on:
@@ -43,18 +79,10 @@ services:
       mc mb --ignore-existing local/document-insight-originals;
       "
 
-  redis:
-    image: redis:7.4-alpine
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
+  # Worker service for background jobs
   worker:
     build: .
+    image: document-insight-worker:latest
     command: >
       uv run --no-sync rq worker --url redis://redis:6379/0 ingestion
     environment:
@@ -66,9 +94,7 @@ services:
       S3_BUCKET_NAME: document-insight-originals
       S3_REGION: us-east-1
       JWT_SECRET_KEY: replace-with-a-long-random-development-secret
-    models:
-      embedding:
-        endpoint_var: EMBEDDING_BASE_URL
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:?Set MISTRAL_API_KEY in .env}
     depends_on:
       database:
         condition: service_healthy
@@ -80,12 +106,3 @@ services:
 volumes:
   postgres-data:
   object-storage-data:
-
-models:
-  embedding:
-    model: hf.co/vonjack/bge-m3-gguf:Q8_0
-    context_size: 8192
-    runtime_flags:
-      - "--embeddings"
-      - "--pooling"
-      - "mean"

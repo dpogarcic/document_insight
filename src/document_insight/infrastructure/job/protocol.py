@@ -37,8 +37,28 @@ class JobRepository(Protocol):
     async def claim(self, job_id: UUID, started_at: datetime) -> ProcessingJob | None:
         """Claim a queued or retried processing job and return worker-only data."""
 
-    async def fail(self, job_id: UUID, error_code: str, finished_at: datetime) -> None:
+    async def fail(
+        self,
+        job_id: UUID,
+        error_code: str,
+        finished_at: datetime,
+        error_category: str = "permanent",
+        failure_reason: str | None = None,
+    ) -> None:
         """Persist a safe terminal processing failure."""
 
     async def mark_ready(self, job_id: UUID, finished_at: datetime) -> None:
         """Persist completion after every derived-data checkpoint succeeds."""
+
+    async def retry(
+        self,
+        job_id: UUID,
+        attempt_count: int,
+        next_retry_at: datetime,
+        error_category: str = "transient",
+    ) -> None:
+        """Schedule a transient failure for retry with exponential backoff.
+
+        Updates the job to queuing state with retry timing metadata so the
+        reconciliation process or a scheduled retry can resume it.
+        """

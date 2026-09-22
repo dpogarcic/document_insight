@@ -25,7 +25,10 @@ from document_insight.application.ingestion.exceptions import (
     UnsupportedDocumentTypeError,
 )
 from document_insight.application.jobs.exceptions import JobNotFoundError
-from document_insight.application.query.exceptions import QueryProfileUnavailableError
+from document_insight.application.query.exceptions import (
+    QueryProfileUnavailableError,
+    QueryProviderUnavailableError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +157,14 @@ def register_exception_handlers(app: FastAPI) -> None:
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "query_profile_unavailable",
             "Document queries are not available because no active query profile is configured.",
+        )
+
+    @app.exception_handler(QueryProviderUnavailableError)
+    async def handle_query_provider_unavailable(_: Request, __: Exception) -> JSONResponse:
+        return error_response(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "query_provider_unavailable",
+            "Document query processing is temporarily unavailable. Please retry.",
         )
 
     @app.exception_handler(Exception)

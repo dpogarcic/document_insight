@@ -70,6 +70,61 @@ class EmbeddingConfiguration(BaseModel):
     batch_size: Annotated[int, Field(ge=1, le=512)]
 
 
+class RerankingConfiguration(BaseModel):
+    """Non-secret settings for a profile-selected document-query ranker."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: str
+    model: str
+    configuration_revision: str
+    prompt_revision: str
+    response_schema_revision: str
+    temperature: Annotated[float, Field(ge=0.0, le=2.0)]
+    max_output_tokens: Annotated[int, Field(ge=64, le=4_096)]
+
+
+class GenerationConfiguration(BaseModel):
+    """Non-secret settings for a profile-selected grounded answer generator."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: str
+    model: str
+    configuration_revision: str
+    prompt_revision: str
+    response_schema_revision: str
+    temperature: Annotated[float, Field(ge=0.0, le=2.0)]
+    max_output_tokens: Annotated[int, Field(ge=64, le=4_096)]
+
+
+class RetrievalConfiguration(BaseModel):
+    """Bounded and immutable retrieval controls for one query profile."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    lexical_candidate_limit: Annotated[int, Field(ge=1, le=200)]
+    vector_candidate_limit: Annotated[int, Field(ge=1, le=200)]
+    rerank_candidate_limit: Annotated[int, Field(ge=1, le=200)]
+    rrf_k: Annotated[int, Field(ge=1, le=1_000)]
+    entity_match_boost: Annotated[float, Field(ge=0.0, le=1.0)]
+    insufficient_evidence_threshold: Annotated[float, Field(ge=0.0, le=1.0)]
+    min_citation_score: Annotated[float, Field(ge=0.0, le=1.0)]
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedQueryProfile:
+    """Exact immutable configuration selected for one complete RAG execution."""
+
+    query_profile_id: UUID
+    lexical_profile_ids: tuple[UUID, ...]
+    embedding_profile_ids: tuple[UUID, ...]
+    embedding_configurations: tuple[tuple[UUID, EmbeddingConfiguration], ...]
+    reranking: RerankingConfiguration
+    generation: GenerationConfiguration
+    retrieval: RetrievalConfiguration
+
+
 @dataclass(frozen=True, slots=True)
 class ResolvedIngestionProfile:
     """Exact immutable configuration a processing job must use."""

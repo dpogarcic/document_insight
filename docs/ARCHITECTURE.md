@@ -96,7 +96,7 @@ Document department membership uses the separate many-to-many model described in
    page-aware chunks under the document version, retaining page and character offsets for
    citations. PostgreSQL generates a `simple` full-text index for each chunk; this temporary
    lexical index is not BM25. The worker then obtains profile-bound embeddings for every
-   chunk through the configured OpenAI-compatible endpoint and persists them with the
+   chunk through the configured Mistral embeddings endpoint and persists them with the
    embedding profile that produced them.
 6. When processing succeeds, the worker marks that version `ready` but does not change the
    document's current pointer. A tenant administrator explicitly selects a ready version as
@@ -123,8 +123,12 @@ Document department membership uses the separate many-to-many model described in
    authorization scope. This preparation completes before any entity, lexical, or vector data is read.
 3. It applies that scope before entity matching, lexical retrieval, and vector retrieval.
 3. Query entities may add a document-level candidate or modest document-level boost. They do not select chunks or citations and are never a mandatory retrieval filter.
-4. It fuses lexical and vector chunk candidates with RRF, reranks them, then sends only selected authorized passages to the configured generation provider.
-5. The response includes the answer, evidence-confidence score, detected entities, and citations to the exact document version and passage.
+4. It fuses lexical and vector chunk candidates with RRF, reranks them, applies the configured
+   insufficient-evidence and citation-quality thresholds, then sends only citable authorized
+   passages to the configured generation provider.
+5. The provider must return valid references to those supplied passages. The response includes
+   the answer, evidence-confidence score, detected entities, and citations to the exact document
+   version and passage; an ungroundable answer is returned as insufficient evidence.
 
 ### Entity metadata
 

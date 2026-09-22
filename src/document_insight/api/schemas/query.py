@@ -1,6 +1,6 @@
 """Request and response schemas for document queries."""
 
-from typing import Annotated, Literal
+from typing import Annotated
 from uuid import UUID
 
 from pydantic import Field, StringConstraints
@@ -34,20 +34,17 @@ class SourceCitationDTO(ApiModel):
 
 
 class DetectedEntityDTO(ApiModel):
-    """Named entity found in a selected source passage."""
+    """Authorized document-version entity that softly assisted retrieval."""
 
     text: NonEmptyText
     label: NonEmptyText
-    source_chunk_id: UUID
+    document_version_id: UUID
 
 
-class QueryPreparedDTO(ApiModel):
-    """Authorization-safe query handoff produced before retrieval begins."""
+class QueryDTO(ApiModel):
+    """Evidence-grounded answer returned after authorized hybrid retrieval."""
 
-    status: Literal["prepared"] = "prepared"
-    query_profile_id: UUID
-    lexical_profile_ids: list[UUID]
-    embedding_profile_ids: list[UUID]
-    authorized_department_ids: list[UUID]
-    filter: str | None
-    top_k: int
+    answer: NonEmptyText
+    confidence: Annotated[float, Field(ge=0.0, le=1.0)]
+    sources: list[SourceCitationDTO]
+    entities: list[DetectedEntityDTO]

@@ -161,6 +161,7 @@ async def ingest_context() -> AsyncIterator[IngestContext]:
     settings = Settings(
         database_url="sqlite+aiosqlite://",
         jwt_secret_key=SecretStr("test-secret-key-that-is-long-enough"),
+        mistral_api_key=SecretStr("test-mistral-key"),
     )
     token = JwtTokenIssuer(
         secret_key=settings.jwt_secret_key,

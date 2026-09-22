@@ -35,7 +35,7 @@ We will accept uploads quickly and process each immutable document version throu
   PostgreSQL generates a `simple` full-text index for the chunk text. The chunks and
   checkpoint are committed together, making RQ retries idempotent. This is a temporary
   lexical index, not BM25.
-- The worker batches chunks through the configured OpenAI-compatible embedding adapter,
+- The worker batches chunks through the configured Mistral embedding adapter,
   validates the profile-declared vector dimension, and stores vectors with their exact
   profile-bound index generation. It then marks the version, index generation, and job
   `ready`; activation remains a deliberately separate tenant-admin operation.

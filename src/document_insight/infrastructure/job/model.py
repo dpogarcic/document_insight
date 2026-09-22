@@ -1,8 +1,7 @@
 """Processing-job ORM model."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
-
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
@@ -32,6 +31,10 @@ class JobModel(Base):
             name="valid_status",
         ),
         CheckConstraint("attempt_count >= 0", name="non_negative_attempt_count"),
+        CheckConstraint(
+            "error_category IN ('transient', 'permanent', 'timeout', 'configuration')",
+            name="valid_error_category",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
@@ -66,6 +69,10 @@ class JobModel(Base):
     status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
     error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    error_category: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("users.id", ondelete="RESTRICT"),

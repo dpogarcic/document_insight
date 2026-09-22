@@ -3,13 +3,12 @@
 Revision ID: 20260921_0009
 Revises: 20260921_0008
 """
+
 import json
 from collections.abc import Sequence
-from uuid import uuid4
 
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.dialects import postgresql
 
 revision: str = "20260921_0009"
 down_revision: str | None = "20260921_0008"
@@ -36,6 +35,7 @@ _QUERY_ACTIVATION_ID = "0b91a2a8-7f3c-45d9-8d99-000000000055"
 def _fingerprint(configuration: dict) -> str:
     """Create a stable non-secret configuration fingerprint."""
     from hashlib import sha256
+
     encoded = json.dumps(configuration, sort_keys=True, separators=(",", ":"))
     return sha256(encoded.encode()).hexdigest()
 
@@ -52,8 +52,29 @@ def upgrade() -> None:
         """).bindparams(
             id=_RANKER_SNAPSHOT_ID,
             capability="reranking",
-            fingerprint=_fingerprint({"provider": "openai_compatible", "model": "cross-encoder/ettin-reranker-17m-v1", "configuration_revision": "1"}),
-            configuration=json.dumps({"provider": "openai_compatible", "model": "cross-encoder/ettin-reranker-17m-v1", "configuration_revision": "1"}, sort_keys=True),
+            fingerprint=_fingerprint(
+                {
+                    "provider": "mistral",
+                    "model": "ministral-3b-2512",
+                    "configuration_revision": "ministral-3b-2512",
+                    "prompt_revision": "llm-rerank-v2",
+                    "response_schema_revision": "rerank-scores-v2",
+                    "temperature": 0.0,
+                    "max_output_tokens": 2048,
+                }
+            ),
+            configuration=json.dumps(
+                {
+                    "provider": "mistral",
+                    "model": "ministral-3b-2512",
+                    "configuration_revision": "ministral-3b-2512",
+                    "prompt_revision": "llm-rerank-v2",
+                    "response_schema_revision": "rerank-scores-v2",
+                    "temperature": 0.0,
+                    "max_output_tokens": 2048,
+                },
+                sort_keys=True,
+            ),
         )
     )
 
@@ -66,7 +87,7 @@ def upgrade() -> None:
         """).bindparams(
             id=_RANKER_PROFILE_ID,
             capability="reranking",
-            name="ettin-reranker-17m-v1",
+            name="ministral-3b-2512-reranker-v2",
             snapshot_id=_RANKER_SNAPSHOT_ID,
         )
     )
@@ -80,8 +101,29 @@ def upgrade() -> None:
         """).bindparams(
             id=_GENERATOR_SNAPSHOT_ID,
             capability="generation",
-            fingerprint=_fingerprint({"provider": "openai_compatible", "model": "Qwen/Qwen3.5-0.8B-Instruct", "configuration_revision": "1", "max_output_tokens": 1024}),
-            configuration=json.dumps({"provider": "openai_compatible", "model": "Qwen/Qwen3.5-0.8B-Instruct", "configuration_revision": "1", "max_output_tokens": 1024}, sort_keys=True),
+            fingerprint=_fingerprint(
+                {
+                    "provider": "mistral",
+                    "model": "ministral-3b-2512",
+                    "configuration_revision": "ministral-3b-2512",
+                    "prompt_revision": "grounded-answer-v3",
+                    "response_schema_revision": "grounded-answer-indices-v1",
+                    "temperature": 0.0,
+                    "max_output_tokens": 1024,
+                }
+            ),
+            configuration=json.dumps(
+                {
+                    "provider": "mistral",
+                    "model": "ministral-3b-2512",
+                    "configuration_revision": "ministral-3b-2512",
+                    "prompt_revision": "grounded-answer-v3",
+                    "response_schema_revision": "grounded-answer-indices-v1",
+                    "temperature": 0.0,
+                    "max_output_tokens": 1024,
+                },
+                sort_keys=True,
+            ),
         )
     )
 
@@ -94,7 +136,7 @@ def upgrade() -> None:
         """).bindparams(
             id=_GENERATOR_PROFILE_ID,
             capability="generation",
-            name="qwen-qwen3.5-0.8b-instruct",
+            name="ministral-3b-2512-grounded-answer-v3",
             snapshot_id=_GENERATOR_SNAPSHOT_ID,
         )
     )
@@ -106,7 +148,8 @@ def upgrade() -> None:
         "rerank_candidate_limit": 20,
         "rrf_k": 60,
         "entity_match_boost": 0.1,
-        "insufficient_evidence_threshold": 0.1,
+        "insufficient_evidence_threshold": 0.45,
+        "min_citation_score": 0.35,
     }
     op.execute(
         sa.text("""
@@ -176,32 +219,52 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Remove query profile data."""
     op.execute(
-        sa.text("DELETE FROM profile_activations WHERE id = CAST(:id AS uuid)").bindparams(id=_QUERY_ACTIVATION_ID)
+        sa.text("DELETE FROM profile_activations WHERE id = CAST(:id AS uuid)").bindparams(
+            id=_QUERY_ACTIVATION_ID
+        )
     )
     op.execute(
-        sa.text("DELETE FROM active_profiles WHERE id = CAST(:id AS uuid)").bindparams(id=_ACTIVE_QUERY_PROFILE_ID)
+        sa.text("DELETE FROM active_profiles WHERE id = CAST(:id AS uuid)").bindparams(
+            id=_ACTIVE_QUERY_PROFILE_ID
+        )
     )
     op.execute(
-        sa.text("DELETE FROM query_profile_embedding_cohorts WHERE query_profile_id = CAST(:id AS uuid)").bindparams(id=_QUERY_PROFILE_ID)
+        sa.text(
+            "DELETE FROM query_profile_embedding_cohorts WHERE query_profile_id = CAST(:id AS uuid)"
+        ).bindparams(id=_QUERY_PROFILE_ID)
     )
     op.execute(
-        sa.text("DELETE FROM query_profile_lexical_cohorts WHERE query_profile_id = CAST(:id AS uuid)").bindparams(id=_QUERY_PROFILE_ID)
+        sa.text(
+            "DELETE FROM query_profile_lexical_cohorts WHERE query_profile_id = CAST(:id AS uuid)"
+        ).bindparams(id=_QUERY_PROFILE_ID)
     )
     op.execute(
-        sa.text("DELETE FROM query_profiles WHERE id = CAST(:id AS uuid)").bindparams(id=_QUERY_PROFILE_ID)
+        sa.text("DELETE FROM query_profiles WHERE id = CAST(:id AS uuid)").bindparams(
+            id=_QUERY_PROFILE_ID
+        )
     )
     op.execute(
-        sa.text("DELETE FROM capability_profiles WHERE id = CAST(:id AS uuid)").bindparams(id=_GENERATOR_PROFILE_ID)
+        sa.text("DELETE FROM capability_profiles WHERE id = CAST(:id AS uuid)").bindparams(
+            id=_GENERATOR_PROFILE_ID
+        )
     )
     op.execute(
-        sa.text("DELETE FROM configuration_snapshots WHERE id = CAST(:id AS uuid)").bindparams(id=_GENERATOR_SNAPSHOT_ID)
+        sa.text("DELETE FROM configuration_snapshots WHERE id = CAST(:id AS uuid)").bindparams(
+            id=_GENERATOR_SNAPSHOT_ID
+        )
     )
     op.execute(
-        sa.text("DELETE FROM capability_profiles WHERE id = CAST(:id AS uuid)").bindparams(id=_RANKER_PROFILE_ID)
+        sa.text("DELETE FROM capability_profiles WHERE id = CAST(:id AS uuid)").bindparams(
+            id=_RANKER_PROFILE_ID
+        )
     )
     op.execute(
-        sa.text("DELETE FROM configuration_snapshots WHERE id = CAST(:id AS uuid)").bindparams(id=_RANKER_SNAPSHOT_ID)
+        sa.text("DELETE FROM configuration_snapshots WHERE id = CAST(:id AS uuid)").bindparams(
+            id=_RANKER_SNAPSHOT_ID
+        )
     )
     op.execute(
-        sa.text("DELETE FROM configuration_snapshots WHERE id = CAST(:id AS uuid)").bindparams(id=_RETRIEVAL_SNAPSHOT_ID)
+        sa.text("DELETE FROM configuration_snapshots WHERE id = CAST(:id AS uuid)").bindparams(
+            id=_RETRIEVAL_SNAPSHOT_ID
+        )
     )

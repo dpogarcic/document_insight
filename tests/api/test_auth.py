@@ -48,6 +48,7 @@ async def auth_client() -> AsyncIterator[tuple[AsyncClient, async_sessionmaker[A
     settings = Settings(
         database_url="sqlite+aiosqlite://",
         jwt_secret_key=SecretStr("test-secret-key-that-is-long-enough"),
+        mistral_api_key=SecretStr("test-mistral-key"),
         jwt_access_token_expire_minutes=30,
     )
     application = create_app()

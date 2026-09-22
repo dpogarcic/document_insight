@@ -24,10 +24,10 @@ class SqlAlchemyQueryProfileRepository(QueryProfileRepository):
 
     async def get(self, query_profile_id: UUID) -> ResolvedQueryProfile | None:
         """Return a query profile only when its immutable parent exists."""
-        exists = await self._session.scalar(
-            select(QueryProfileModel.id).where(QueryProfileModel.id == query_profile_id)
+        model = await self._session.scalar(
+            select(QueryProfileModel).where(QueryProfileModel.id == query_profile_id)
         )
-        if exists is None:
+        if model is None:
             return None
         lexical_profile_ids = tuple(
             await self._session.scalars(
@@ -43,4 +43,11 @@ class SqlAlchemyQueryProfileRepository(QueryProfileRepository):
                 )
             )
         )
-        return ResolvedQueryProfile(query_profile_id, lexical_profile_ids, embedding_profile_ids)
+        return ResolvedQueryProfile(
+            query_profile_id,
+            lexical_profile_ids,
+            embedding_profile_ids,
+            model.reranker_profile_id,
+            model.generation_profile_id,
+            model.retrieval_snapshot_id,
+        )

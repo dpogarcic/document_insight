@@ -5,16 +5,23 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from document_insight.application.configuration.exceptions import InvalidProcessingProfileError
-from document_insight.application.configuration.models import EmbeddingConfiguration
+from document_insight.application.configuration.models import EmbeddingConfiguration, ResolvedIngestionProfile
 from document_insight.application.configuration.service import IngestionProfileResolver
 from document_insight.application.ingestion.models import DocumentMediaType
+from document_insight.application.jobs.models import JobRecord, JobStatus, ProcessingJob
 from document_insight.application.processing.exceptions import (
     EmbeddingError,
     NerError,
     ParsingError,
     UnsupportedProcessingMediaTypeError,
 )
-from document_insight.application.processing.models import canonicalize_entities
+from document_insight.application.processing.models import (
+    CanonicalEntity,
+    DocumentChunk,
+    NerResult,
+    canonicalize_entities,
+)
+from document_insight.application.processing.retry import RetryCoordinator, RetryConfig
 from document_insight.infrastructure.chunk.protocol import (
     ChunkForEmbedding,
     ChunkRepository,
@@ -27,18 +34,21 @@ from document_insight.infrastructure.chunk_embedding.protocol import (
 )
 from document_insight.infrastructure.database.transaction import TransactionManager
 from document_insight.infrastructure.document_chunker.protocol import DocumentChunkerFactory
+from document_insight.infrastructure.document_chunker.protocol import DocumentChunker
 from document_insight.infrastructure.document_parser.protocol import DocumentParser
 from document_insight.infrastructure.document_version.protocol import DocumentVersionRepository
+from document_insight.infrastructure.document_version.protocol import ProcessingDocumentVersion
 from document_insight.infrastructure.embedding.protocol import TextEmbedderFactory
 from document_insight.infrastructure.entity.protocol import CreateEntities, EntityRepository
 from document_insight.infrastructure.extracted_document.protocol import (
     CreateExtractedDocument,
     ExtractedDocumentRepository,
 )
-from document_insight.infrastructure.index_generation.protocol import IndexGenerationRepository
+from document_insight.infrastructure.index_generation.protocol import IndexGeneration, IndexGenerationRepository
 from document_insight.infrastructure.job.protocol import JobRepository
 from document_insight.infrastructure.ner.protocol import NamedEntityRecognizerFactory
 from document_insight.infrastructure.object_storage.protocol import OriginalObjectStorage
+from document_insight.infrastructure.queue.protocol import ProcessingQueue
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +73,8 @@ class ProcessingService:
         chunkers: DocumentChunkerFactory,
         embedders: TextEmbedderFactory,
         transactions: TransactionManager,
+        queue: ProcessingQueue | None = None,
+        retry_coordinator: RetryCoordinator | None = None,
     ) -> None:
         self._jobs = jobs
         self._document_versions = document_versions
@@ -79,9 +91,18 @@ class ProcessingService:
         self._chunkers = chunkers
         self._embedders = embedders
         self._transactions = transactions
+        self._queue = queue
+        self._retry = retry_coordinator or RetryCoordinator(
+            jobs, queue=queue
+        )
 
     async def process(self, job_id: UUID) -> None:
-        """Resume a job through durable parsing and NER checkpoints."""
+        """Resume a job through durable parsing and NER checkpoints.
+
+        On transient failures (network, provider errors), the job is scheduled
+        for retry with exponential backoff instead of being marked failed.
+        Permanent failures (parsing, unsupported media) are marked failed immediately.
+        """
         profile_error: str | None = None
         profile = None
         chunker = None
@@ -126,14 +147,56 @@ class ProcessingService:
         if version is None:
             return
         if job.ingestion_profile_id is None or job.index_generation_id is None:
-            await self._fail(job.job_id, version.document_version_id, "processing_profile_missing")
+            await self._retry.record_permanent_failure(
+                job,
+                "processing_profile_missing",
+                "profile_or_generation_missing",
+            )
             return
         if profile_error is not None:
-            await self._fail(job.job_id, version.document_version_id, profile_error)
+            await self._retry.record_permanent_failure(
+                job,
+                profile_error,
+                "profile_resolution_failed",
+            )
             return
         assert generation is not None
         assert profile is not None
         assert chunker is not None
+        try:
+            await self._process_version(
+                job, version, generation, profile, chunker, extracted_text, ner_complete
+            )
+        except Exception as error:
+            error_category = self._retry.classify_error(error)
+            if error_category == "permanent":
+                error_code = getattr(error, "error_code", str(type(error).__name__))
+                await self._retry.record_permanent_failure(
+                    job,
+                    error_code,
+                    str(error),
+                )
+            else:
+                job_record = await self._jobs.get(job_id, job.tenant_id)
+                attempt_count = job_record.attempt_count if job_record else 0
+                await self._retry.record_transient_failure(
+                    job,
+                    attempt_count,
+                    error,
+                )
+
+    async def _process_version(
+        self,
+        job: ProcessingJob,
+        version: ProcessingDocumentVersion,
+        generation: IndexGeneration,
+        profile: ResolvedIngestionProfile,
+        chunker: DocumentChunker,
+        extracted_text: str | None,
+        ner_complete: bool,
+    ) -> None:
+        """Process a single version through parsing, NER, chunking, and embedding."""
+        ig_id: UUID | None = None
         if extracted_text is None:
             try:
                 parser = (
@@ -195,9 +258,11 @@ class ProcessingService:
                     )
         if generation.chunking_completed_at is None:
             chunks = chunker.chunk(extracted_text)
+            ig_id = job.index_generation_id
+            assert ig_id is not None
             async with self._transactions.begin():
                 current_generation = await self._index_generations.get(
-                    job.index_generation_id, version.tenant_id
+                    ig_id, version.tenant_id
                 )
                 if (
                     current_generation is not None
@@ -206,19 +271,21 @@ class ProcessingService:
                     await self._chunks.create_many(
                         CreateChunks(
                             document_version_id=version.document_version_id,
-                            index_generation_id=job.index_generation_id,
+                            index_generation_id=ig_id,
                             tenant_id=version.tenant_id,
                             language=language,
                             chunks=chunks,
                         )
                     )
                     await self._index_generations.mark_chunking_complete(
-                        job.index_generation_id, datetime.now(UTC)
+                        ig_id, datetime.now(UTC)
                     )
         if generation.embedding_completed_at is None:
+            ig_id = job.index_generation_id
+            assert ig_id is not None
             async with self._transactions.begin():
                 chunks_to_embed = await self._chunks.list_for_embedding(
-                    job.index_generation_id, version.tenant_id
+                    ig_id, version.tenant_id
                 )
             try:
                 embeddings = await self._embed_chunks(chunks_to_embed, profile.embedding)
@@ -232,11 +299,17 @@ class ProcessingService:
                         "error_code": "embedding_failed",
                     },
                 )
-                await self._fail(job.job_id, version.document_version_id, "embedding_failed")
+                job_record = await self._jobs.get(job.job_id, job.tenant_id)
+                attempt_count = job_record.attempt_count if job_record else 0
+                await self._retry.record_transient_failure(
+                    job,
+                    attempt_count,
+                    error,
+                )
                 return
             async with self._transactions.begin():
                 current_generation = await self._index_generations.get(
-                    job.index_generation_id, version.tenant_id
+                    ig_id, version.tenant_id
                 )
                 if (
                     current_generation is not None
@@ -246,23 +319,29 @@ class ProcessingService:
                         CreateChunkEmbeddings(profile.embedding_profile_id, embeddings)
                     )
                     await self._index_generations.mark_embedding_complete(
-                        job.index_generation_id, datetime.now(UTC)
+                        ig_id, datetime.now(UTC)
                     )
-        await self._complete(job.job_id, version.document_version_id, job.index_generation_id)
+        assert ig_id is not None, "index generation must exist after chunking stage"
+        await self._complete(job.job_id, version.document_version_id, ig_id)
 
     async def _embed_chunks(
         self,
         chunks: tuple[ChunkForEmbedding, ...],
         configuration: EmbeddingConfiguration,
     ) -> tuple[ChunkEmbedding, ...]:
-        """Generate stable profile-bound vectors in bounded provider batches."""
+        """Generate stable profile-bound vectors in bounded provider batches.
+
+        Raises EmbeddingError if any batch fails — the caller is responsible for
+        retry classification. Partial success is not supported; either all chunks
+        are embedded or the stage is retried.
+        """
         embedder = self._embedders.create(configuration)
         result: list[ChunkEmbedding] = []
         for offset in range(0, len(chunks), configuration.batch_size):
             batch = chunks[offset : offset + configuration.batch_size]
             vectors = await embedder.embed(tuple(chunk.text for chunk in batch), configuration)
             if len(vectors) != len(batch):
-                raise EmbeddingError
+                raise EmbeddingError("vector_count_mismatch")
             result.extend(
                 ChunkEmbedding(chunk.chunk_id, vector)
                 for chunk, vector in zip(batch, vectors, strict=True)
@@ -277,7 +356,9 @@ class ProcessingService:
 
     async def _complete(self, job_id: UUID, version_id: UUID, index_generation_id: UUID) -> None:
         """Atomically finish processing without activating the ready version."""
+        ig_id = index_generation_id
+        assert ig_id is not None
         async with self._transactions.begin():
             await self._document_versions.mark_ready(version_id)
-            await self._index_generations.mark_ready(index_generation_id)
+            await self._index_generations.mark_ready(ig_id)
             await self._jobs.mark_ready(job_id, datetime.now(UTC))

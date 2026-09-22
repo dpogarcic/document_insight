@@ -13,6 +13,13 @@ class DocumentMediaType(StrEnum):
     JPEG = "image/jpeg"
 
 
+class DocumentLanguage(StrEnum):
+    """Languages supported by the initial local NER provider."""
+
+    ENGLISH = "en"
+    CROATIAN = "hr"
+
+
 class DocumentVersionStatus(StrEnum):
     """Lifecycle states for an immutable document version."""
 

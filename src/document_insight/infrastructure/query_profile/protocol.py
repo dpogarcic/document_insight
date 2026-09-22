@@ -12,6 +12,9 @@ class ResolvedQueryProfile:
     query_profile_id: UUID
     lexical_profile_ids: tuple[UUID, ...]
     embedding_profile_ids: tuple[UUID, ...]
+    reranker_profile_id: UUID
+    generation_profile_id: UUID
+    retrieval_snapshot_id: UUID
 
 
 class QueryProfileRepository(Protocol):

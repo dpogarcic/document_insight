@@ -7,6 +7,7 @@ from uuid import UUID
 from document_insight.api.logging_config import configure_server_logging
 from document_insight.api.middleware.correlation_id import correlation_id_scope
 from document_insight.application.configuration.service import IngestionProfileResolver
+from document_insight.application.processing.retry import RetryCoordinator
 from document_insight.application.processing.service import ProcessingService
 from document_insight.config import get_settings
 from document_insight.infrastructure.capability_profile.repository import (
@@ -29,9 +30,6 @@ from document_insight.infrastructure.document_parser.pypdf import PyPdfDocumentP
 from document_insight.infrastructure.document_version.repository import (
     SqlAlchemyDocumentVersionRepository,
 )
-from document_insight.infrastructure.embedding.openai_compatible import (
-    OpenAICompatibleTextEmbedderFactory,
-)
 from document_insight.infrastructure.entity.repository import SqlAlchemyEntityRepository
 from document_insight.infrastructure.extracted_document.repository import (
     SqlAlchemyExtractedDocumentRepository,
@@ -43,8 +41,10 @@ from document_insight.infrastructure.ingestion_profile.repository import (
     SqlAlchemyIngestionProfileRepository,
 )
 from document_insight.infrastructure.job.repository import SqlAlchemyJobRepository
+from document_insight.infrastructure.mistral.embedding import MistralTextEmbedderFactory
 from document_insight.infrastructure.ner.spacy import SpacyNamedEntityRecognizerFactory
 from document_insight.infrastructure.object_storage.s3 import S3OriginalObjectStorage
+from document_insight.infrastructure.queue.rq import RqProcessingQueue
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +62,10 @@ def process_ingestion_job(job_id: str, correlation_id: str) -> None:
 
 
 async def _process(job_id: UUID) -> None:
-    """Compose one worker-scoped parsing service."""
+    """Compose one worker-scoped parsing service with retry support."""
     settings = get_settings()
+    if settings.mistral_api_key is None:
+        raise RuntimeError("MISTRAL_API_KEY must be configured for ingestion processing")
     storage = S3OriginalObjectStorage(
         settings.s3_endpoint_url,
         settings.s3_access_key.get_secret_value(),
@@ -72,8 +74,14 @@ async def _process(job_id: UUID) -> None:
         settings.s3_region,
     )
     async with get_session_factory()() as session:
+        jobs_repo = SqlAlchemyJobRepository(session)
+        queue = RqProcessingQueue(
+            settings.redis_url,
+            settings.rq_ingestion_queue_name,
+        )
+        retry_coordinator = RetryCoordinator(jobs_repo, queue=queue)
         await ProcessingService(
-            SqlAlchemyJobRepository(session),
+            jobs_repo,
             SqlAlchemyDocumentVersionRepository(session),
             SqlAlchemyExtractedDocumentRepository(session),
             SqlAlchemyEntityRepository(session),
@@ -90,11 +98,11 @@ async def _process(job_id: UUID) -> None:
             TesseractImageDocumentParser(),
             SpacyNamedEntityRecognizerFactory(),
             PageWindowDocumentChunkerFactory(),
-            OpenAICompatibleTextEmbedderFactory(
-                settings.embedding_base_url,
-                None
-                if settings.embedding_api_key is None
-                else settings.embedding_api_key.get_secret_value(),
+            MistralTextEmbedderFactory(
+                settings.mistral_base_url,
+                settings.mistral_api_key.get_secret_value(),
             ),
             SqlAlchemyTransactionManager(session),
+            queue=queue,
+            retry_coordinator=retry_coordinator,
         ).process(job_id)

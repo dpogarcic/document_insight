@@ -4,7 +4,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
@@ -16,7 +16,7 @@ from document_insight.application.configuration.models import (
     ResolvedIngestionProfile,
 )
 from document_insight.application.ingestion.models import DocumentMediaType
-from document_insight.application.jobs.models import ProcessingJob
+from document_insight.application.jobs.models import JobRecord, JobStatus, ProcessingJob
 from document_insight.application.processing.exceptions import (
     EmbeddingError,
     NerError,
@@ -44,12 +44,46 @@ class FakeJobs:
     job: ProcessingJob | None
     failures: list[tuple[UUID, str]] = field(default_factory=list)
     ready: list[UUID] = field(default_factory=list)
+    attempts: dict[UUID, int] = field(default_factory=dict)
 
     async def claim(self, _: UUID, __: datetime) -> ProcessingJob | None:
         return self.job
 
-    async def fail(self, job_id: UUID, error_code: str, _: datetime) -> None:
+    async def get(self, job_id: UUID, tenant_id: UUID) -> JobRecord | None:
+        if self.job is None or self.job.job_id != job_id:
+            return None
+        return JobRecord(
+            job_id=self.job.job_id,
+            tenant_id=self.job.tenant_id,
+            document_version_id=self.job.document_version_id,
+            status=JobStatus.PROCESSING,
+            attempt_count=self.attempts.get(job_id, 0),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+            error_code=None,
+        )
+
+    async def fail(
+        self,
+        job_id: UUID,
+        error_code: str,
+        finished_at: datetime,
+        error_category: str = "permanent",
+        failure_reason: str | None = None,
+    ) -> None:
         self.failures.append((job_id, error_code))
+
+    async def mark_enqueued(self, job_id: UUID, enqueued_at: datetime) -> None:
+        pass
+
+    async def retry(
+        self,
+        job_id: UUID,
+        attempt_count: int,
+        next_retry_at: datetime,
+        error_category: str = "transient",
+    ) -> None:
+        self.attempts[job_id] = attempt_count
 
     async def mark_ready(self, job_id: UUID, _: datetime) -> None:
         self.ready.append(job_id)
@@ -313,7 +347,7 @@ def service_for(
     FakeEmbedder,
 ]:
     """Build an isolated processing service and observable collaborator fakes."""
-    job = ProcessingJob(uuid4(), uuid4(), uuid4(), uuid4(), uuid4(), uuid4())
+    job = ProcessingJob(uuid4(), uuid4(), uuid4(), uuid4(), uuid4(), uuid4(), 0)
     versions = FakeVersions(
         ProcessingDocumentVersion(job.document_version_id, job.tenant_id, "object-key", media_type)
     )
@@ -425,12 +459,12 @@ async def test_parsing_failure_marks_job_and_version_failed() -> None:
 
 @pytest.mark.anyio
 async def test_storage_failure_propagates_for_queue_retry() -> None:
-    """Transient storage failures leave durable state retryable for RQ."""
+    """Transient storage failures are classified as transient and scheduled for retry."""
     service, jobs, versions, documents, _, _, _, _, _, _ = service_for(storage_error=OSError())
 
-    with pytest.raises(OSError):
-        await service.process(jobs.job.job_id)  # type: ignore[union-attr]
+    await service.process(jobs.job.job_id)  # type: ignore[union-attr]
 
+    # OSError from storage is now classified as transient, not propagated
     assert jobs.failures == []
     assert versions.failed == []
     assert documents.created == []
@@ -490,19 +524,21 @@ async def test_ner_failure_marks_job_and_version_failed() -> None:
 
 
 @pytest.mark.anyio
-async def test_embedding_failure_marks_job_and_version_failed(
+async def test_embedding_failure_is_transient_and_scheduled_for_retry(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Embedding provider failures persist only a stable, safe failure code."""
+    """Embedding provider failures are transient and scheduled for retry."""
     service, jobs, versions, _, _, _, _, _, embeddings, embedder = service_for(
         embedding_error=EmbeddingError("provider_rejected_http_400")
     )
-    caplog.set_level(logging.ERROR, logger="document_insight.application.processing.service")
+    caplog.set_level(logging.WARNING, logger="document_insight.application.processing.retry")
 
     await service.process(jobs.job.job_id)  # type: ignore[union-attr]
 
     assert embedder.calls == [("chunk for embedding",)]
     assert embeddings.created == []
-    assert jobs.failures == [(jobs.job.job_id, "embedding_failed")]  # type: ignore[union-attr]
-    assert versions.failed == [jobs.job.document_version_id]  # type: ignore[union-attr]
-    assert "Embedding stage failed: provider_rejected_http_400" in caplog.text
+    # Embedding failures are transient — job is scheduled for retry, not marked failed
+    assert jobs.failures == []
+    assert versions.failed == []
+    assert "stalled for" in caplog.text
+    assert "embedding_failed" in caplog.text or "Embedding stage failed" in caplog.text

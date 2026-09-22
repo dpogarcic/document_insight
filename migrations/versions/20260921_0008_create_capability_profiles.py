@@ -336,9 +336,9 @@ def upgrade() -> None:
             _EMBEDDING_SNAPSHOT_ID,
             "embedding",
             {
-                "provider": "openai_compatible",
-                "model": "hf.co/vonjack/bge-m3-gguf:Q8_0",
-                "configuration_revision": "1",
+                "provider": "mistral",
+                "model": "mistral-embed",
+                "configuration_revision": "mistral-embed-2023-12",
                 "dimensions": 1024,
                 "normalize": True,
                 "batch_size": 32,
@@ -364,7 +364,7 @@ def upgrade() -> None:
         (_NER_PROFILE_ID, "ner", "spacy-v1", _NER_SNAPSHOT_ID),
         (_CHUNKING_PROFILE_ID, "chunking", "page-window-v1", _CHUNKING_SNAPSHOT_ID),
         (_LEXICAL_PROFILE_ID, "lexical", "postgres-fts-simple-v1", _LEXICAL_SNAPSHOT_ID),
-        (_EMBEDDING_PROFILE_ID, "embedding", "bge-m3-q8-0-v1", _EMBEDDING_SNAPSHOT_ID),
+        (_EMBEDDING_PROFILE_ID, "embedding", "mistral-embed-v1", _EMBEDDING_SNAPSHOT_ID),
     )
     for profile_id, capability, name, snapshot_id in profiles:
         op.execute(

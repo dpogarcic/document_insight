@@ -6,6 +6,7 @@ from typing import Protocol
 from uuid import UUID
 
 from document_insight.application.ingestion.models import (
+    DocumentLanguage,
     DocumentMediaType,
     DocumentVersionStatus,
 )
@@ -36,6 +37,9 @@ class ProcessingDocumentVersion:
     tenant_id: UUID
     object_key: str
     media_type: DocumentMediaType
+    extracted_text: str | None = None
+    ner_complete: bool = False
+    langauge: DocumentLanguage | None = None
 
 
 @dataclass(frozen=True, slots=True)

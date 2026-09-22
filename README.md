@@ -14,8 +14,8 @@ currently validates PDF, PNG, and JPEG uploads, stores immutable originals in lo
 and atomically persists document/version metadata with a durable processing job. The job
 is published to Redis/RQ. The worker extracts PDF/image text, detects English or Croatian,
 enriches document metadata with NER, and stores citation-ready chunks with a PostgreSQL
-full-text lexical index. It also creates profile-bound embeddings through Docker Model
-Runner and marks completed versions ready for later administrator activation. Query remains
+full-text lexical index. It also creates profile-bound embeddings through Mistral and marks
+completed versions ready for later administrator activation. Query remains
 contract-only.
 
 ## Planned capabilities
@@ -55,22 +55,13 @@ uv sync --group dev
 cp .env.example .env
 ```
 
-Start PostgreSQL, pgvector, Redis, the local S3-compatible object store, and the Docker
-Model Runner embedding dependency, then apply migrations. Docker Desktop 4.40+ with
-Docker Compose 2.38+ is required for Compose `models` support:
+Set `MISTRAL_API_KEY` in `.env`, then start PostgreSQL, pgvector, Redis, and the local
+S3-compatible object store before applying migrations:
 
 ```bash
 docker compose up -d database redis object-storage object-storage-init
 uv run alembic upgrade head
 docker compose up -d worker
-```
-
-Docker Model Runner requires BGE-M3 to use embedding mode with mean pooling. Compose
-declares the required runtime flags. If the local runner has already cached this model,
-apply the embedding-mode configuration once before starting the worker:
-
-```bash
-docker model configure --mode embedding hf.co/vonjack/bge-m3-gguf:Q8_0 -- --pooling mean
 ```
 
 Start the API:
@@ -109,8 +100,8 @@ version-scoped extraction checkpoint, detects English or Croatian, and persists 
 entity metadata. It then creates deterministic page-aware chunks, including page and
 character offsets for exact citations, and PostgreSQL generates a `simple` full-text index
 for each chunk. This is a temporary lexical index, not BM25. The worker batches those
-chunks through Docker Model Runner's OpenAI-compatible embeddings endpoint, validates the
-profile-declared vector dimension, and stores vectors under the exact embedding profile.
+chunks through Mistral's embeddings API, validates the profile-declared vector dimension,
+and stores vectors under the exact embedding profile.
 After all checkpoints succeed it marks the index generation, job, and version `ready`.
 It does not make the version searchable; a future tenant-admin activation action will
 atomically select a ready version as the document's current version.

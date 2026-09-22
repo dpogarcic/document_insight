@@ -8,7 +8,6 @@ RUN apt-get update \
 
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
-COPY model_runner.py ./model_runner.py
 
 RUN uv sync --frozen --no-dev
 

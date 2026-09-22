@@ -50,7 +50,8 @@ active profile pointer stored in PostgreSQL may do that.
   profiles used to create an index generation for new uploads.
 - An immutable `query_profile` bundles lexical and embedding read cohorts, one reranker,
   one generation profile, and retrieval settings such as candidate limits, RRF constant,
-  and the insufficient-evidence threshold.
+  insufficient-evidence threshold, and minimum citation score. These thresholds determine
+  whether generation is permitted and which reranked passages can be provided as evidence.
 - `active_profiles` stores the active ingestion and query profile pointers for a scope
   (initially platform-wide). It includes a monotonic revision for optimistic concurrency.
   `profile_activations` is append-only audit history containing the actor, time, prior
@@ -78,12 +79,13 @@ active profile pointer stored in PostgreSQL may do that.
 | `chunk_embeddings` | `chunk_id`, `embedding_profile_id`, vector; unique `(chunk_id, embedding_profile_id)` |
 
 The initial migration creates these profile, generation, and embedding provenance records.
-The processing worker now assigns an ingestion profile and index generation at upload time,
-then resolves the persisted NER, chunking, and embedding snapshots when it processes the
-job. Docker Model Runner supplies the local OpenAI-compatible endpoint through Compose;
-the embedding snapshot remains the source of the BGE-M3 model identifier, configuration
-revision, dimensions, normalization, and batch size. Query profile activation and retrieval
-cohort selection remain future work.
+The processing worker assigns an ingestion profile and index generation at upload time, then
+resolves persisted NER, chunking, and embedding snapshots when it processes the job. Mistral
+supplies cloud embeddings; the snapshot records its model identifier, configuration revision,
+dimensions, normalization, and batch size. Mistral chat models are selected independently for
+structured LLM reranking and grounded generation, whose snapshots also record prompt,
+response-schema, temperature, and output-token revisions. The OpenAI Agents SDK is used only
+for those chat tasks with tracing disabled, so document passages are not exported to tracing.
 
 ### Index generations and compatibility
 
