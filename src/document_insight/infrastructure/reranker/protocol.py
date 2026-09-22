@@ -20,7 +20,12 @@ class RerankScore:
 
 
 class Reranker(Protocol):
-    async def rerank(self, question: str, candidates: tuple[RerankInput, ...], configuration: RerankingConfiguration) -> tuple[RerankScore, ...]: ...
+    async def rerank(
+        self,
+        question: str,
+        candidates: tuple[RerankInput, ...],
+        configuration: RerankingConfiguration,
+    ) -> tuple[RerankScore, ...]: ...
 
 
 class RerankerFactory(Protocol):

@@ -32,7 +32,7 @@ We will build a Python application with logical service boundaries. FastAPI will
 | Query application service | Build the authorized retrieval request, call retrieval and generation providers, assemble cited response | Tenant-policy decisions or direct SQL in route handlers |
 | Retrieval and AI provider layer | Stable interfaces for lexical retrieval, embedding, generation, reranking, and retrieval implementations | HTTP concerns or user identity interpretation |
 | Persistence adapters | PostgreSQL/pgvector, Redis queue, and object-storage access behind explicit interfaces | Business policy |
-| Observability stack | Scrape bounded metrics, collect structured container logs, and provide authenticated dashboards | Public API traffic, document text, authorization decisions |
+| Observability stack | Scrape bounded metrics, collect structured container logs, and provide authenticated dashboards | Public API traffic, document text, authorization decisions; see ADR 005 |
 
 ### Technology baseline
 

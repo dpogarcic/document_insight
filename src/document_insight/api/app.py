@@ -1,16 +1,28 @@
 """FastAPI application factory."""
 
+from datetime import UTC, datetime
+
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from document_insight import __version__
 from document_insight.api.exception_handlers import register_exception_handlers
 from document_insight.api.logging_config import configure_server_logging
-from document_insight.api.metrics import PrometheusMetricsMiddleware, metrics_response
+from document_insight.api.metrics import (
+    PrometheusMetricsMiddleware,
+    authorize_metrics_request,
+    metrics_response,
+)
 from document_insight.api.middleware.correlation_id import CorrelationIdMiddleware
 from document_insight.api.routes import api_router
+from document_insight.application.jobs.monitoring import ProcessingJobMonitoringService
 from document_insight.config import get_settings
 from document_insight.infrastructure.database import model_registry as _model_registry  # noqa: F401
+from document_insight.infrastructure.database.session import get_session_factory
+from document_insight.infrastructure.job.repository import SqlAlchemyJobRepository
+from document_insight.infrastructure.observability.processing_job_metrics import (
+    PrometheusProcessingJobMetrics,
+)
 
 
 def create_app() -> FastAPI:
@@ -37,6 +49,12 @@ def create_app() -> FastAPI:
 
     async def metrics_endpoint(request: Request) -> Response:
         """Serve authenticated metrics to the private monitoring collector."""
+        authorize_metrics_request(request, settings)
+        async with get_session_factory()() as session:
+            snapshot = await ProcessingJobMonitoringService(
+                SqlAlchemyJobRepository(session)
+            ).snapshot(datetime.now(UTC))
+        PrometheusProcessingJobMetrics().record_snapshot(snapshot)
         return metrics_response(request, settings)
 
     application.add_api_route(

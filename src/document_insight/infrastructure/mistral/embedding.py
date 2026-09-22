@@ -15,6 +15,7 @@ from document_insight.infrastructure.mistral.rate_limit import (
     MAX_RATE_LIMIT_ATTEMPTS,
     retry_delay_seconds,
 )
+from document_insight.infrastructure.observability.provider_metrics import ProviderCallMetrics
 
 Sleep = Callable[[float], Awaitable[None]]
 
@@ -68,6 +69,7 @@ class MistralTextEmbedder(TextEmbedder):
         """Generate profile-compatible vectors for the supplied text batch."""
         if not texts:
             return ()
+        metrics = ProviderCallMetrics("mistral", "embedding")
         try:
             for attempt in range(MAX_RATE_LIMIT_ATTEMPTS):
                 async with httpx.AsyncClient(timeout=60.0, transport=self._transport) as client:
@@ -79,26 +81,51 @@ class MistralTextEmbedder(TextEmbedder):
                 if response.status_code == 429 and attempt + 1 < MAX_RATE_LIMIT_ATTEMPTS:
                     delay = retry_delay_seconds(attempt)
                     logger.info(
-                        "Mistral embedding rate limit retry: model=%s attempt=%s delay_seconds=%.1f",
-                        configuration.model,
-                        attempt + 1,
-                        delay,
+                        "provider request retry scheduled",
+                        extra={
+                            "operation": "provider_request",
+                            "stage": "embedding",
+                            "outcome": "retry_scheduled",
+                            "error_code": "rate_limited",
+                            "provider": "mistral",
+                            "capability": "embedding",
+                        },
                     )
                     await self._sleep(delay)
                     continue
+                if response.status_code == 429:
+                    metrics.rate_limited()
                 response.raise_for_status()
                 break
             payload = _EmbeddingResponse.model_validate(response.json())
         except httpx.HTTPStatusError as error:
+            if error.response.status_code != 429:
+                if error.response.status_code >= 500:
+                    metrics.retryable_failure("provider_unavailable")
+                else:
+                    metrics.failure("provider_rejected")
             raise EmbeddingError(f"provider_rejected_http_{error.response.status_code}") from error
         except (httpx.HTTPError, ValidationError, ValueError) as error:
+            if isinstance(error, httpx.HTTPError):
+                metrics.retryable_failure("provider_unavailable")
+            else:
+                metrics.failure("provider_response_invalid")
             raise EmbeddingError("provider_response_invalid") from error
         ordered = tuple(sorted(payload.data, key=lambda item: item.index))
         if len(ordered) != len(texts) or tuple(item.index for item in ordered) != tuple(
             range(len(texts))
         ):
+            metrics.failure("response_malformed")
             raise EmbeddingError("response_incomplete_or_malformed")
-        return tuple(self._validated_vector(item.embedding, configuration) for item in ordered)
+        try:
+            vectors = tuple(
+                self._validated_vector(item.embedding, configuration) for item in ordered
+            )
+        except EmbeddingError:
+            metrics.failure("response_malformed")
+            raise
+        metrics.success()
+        return vectors
 
     @staticmethod
     def _validated_vector(

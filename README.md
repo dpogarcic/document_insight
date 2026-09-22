@@ -42,6 +42,8 @@ contract-only.
 - [ADR 003: Tenant isolation and security](docs/adr/003-tenant-isolation.md) - tenants,
   departments, roles, authorization, encryption, and auditing.
 - [ADR 004: Capability configuration profiles](docs/adr/004-capability-configuration-profiles.md) - immutable AI configuration, explicit activation, and compatible retrieval across profile generations.
+- [ADR 005: Observability](docs/adr/005-observability.md) - privacy-safe metrics, logs,
+  dashboards, local Compose monitoring, and production operational controls.
 - [Code quality standards](docs/CODE_QUALITY.md) - typing, testing, coverage,
   documentation, security, and merge expectations.
 - [AI Tech Lead assignment](Tech_Assignment.pdf) - original project brief.
@@ -75,18 +77,51 @@ docker compose --profile observability up --build
 
 This starts Prometheus, cAdvisor, Loki, Grafana Alloy, and Grafana. Grafana is available
 only on `http://127.0.0.1:3001`; use the configured `admin` account and
-`GRAFANA_ADMIN_PASSWORD`. The pre-provisioned **Document Insight Overview** dashboard
-shows API request rate, p95 duration, 5xx ratio, and container memory. Explore container
-logs through the Loki datasource.
+`GRAFANA_ADMIN_PASSWORD`. Grafana provisions dashboards for **Document Insight System**
+for API traffic and container CPU, memory, and task-state signals; **Document Insight RAG**
+for query latency and evidence outcomes; and **Document Insight Ingestion** for asynchronous
+job health. The RAG dashboard does not display Recall@K or Precision@K: those require
+labelled offline evaluation data. **Document Insight Logs** starts at a 24-hour window and
+filters Docker logs by service. **Document Insight Alerts** shows current Grafana-managed
+alert states and configured coverage. Inspect every rule, including healthy rules, under
+**Alerting → Alert rules**.
+
+The separate **Document Insight Ingestion** dashboard shows durable jobs by status, the
+age of the oldest queued or in-flight job, jobs awaiting retry, terminal failures,
+worker/reconciler liveness, and per-stage processing outcomes and latency. Job counts and
+ages come from PostgreSQL's authoritative ledger rather than transient Redis queue state.
+
+On Docker Desktop, cAdvisor may expose only an aggregate host cgroup rather than individual
+container cgroups. In that case the memory panel displays the available aggregate instead of
+per-service memory.
 
 Set strong `METRICS_BEARER_TOKEN` and `GRAFANA_ADMIN_PASSWORD` values before enabling the
-profile. Prometheus uses the first only inside the Compose network to scrape the private
+profile. Grafana provisions and evaluates the alert rules against Prometheus. No external
+Alertmanager, contact point, or custom notification policy is configured by this project;
+notification delivery must be configured and tested in Grafana before production use.
+Prometheus uses the first only inside the Compose network to scrape the private
 `/metrics` endpoint; the API returns `404` for that endpoint when no token is configured.
 Prometheus, Loki, cAdvisor, and Alloy do not publish host ports.
 
+Worker, reconciler, and API metrics use Prometheus multiprocess files on a private shared
+volume, reset once before the services start. This makes worker-stage durations, provider
+outcomes, recovered/exhausted-job totals, worker heartbeat, and worker/reconciler
+last-success timestamps
+available through the authenticated API scrape without exposing a worker port.
+The worker heartbeat advances during idle polling and while RQ monitors an active job;
+last completed-job time is intentionally separate. Grafana alerts when the worker heartbeat
+or reconciler success becomes stale, or a processing job remains in flight too long.
+The shared multiprocess volume is a local Compose arrangement: independently recreating
+containers can reuse process IDs and corrupt the metric files, making `/metrics` fail.
+After such a restart, stop the API, worker, and reconciler together, run
+`docker compose run --rm prometheus-multiproc-init`, then start them together.
+Before production deployment, replace this shared-file collection with a restart-safe
+per-instance metric collection design and test rolling restarts.
+
 For production, deploy the same scrape configuration on private infrastructure with
 encrypted persistent storage, secret-manager supplied monitoring and Grafana credentials,
-an authenticated Grafana ingress, backups, alert routing, and production-appropriate
+an authenticated Grafana ingress, backups, Grafana contact points and notification policies,
+and production-appropriate
 retention. Do not expose Prometheus, Loki, cAdvisor, Alloy, or `/metrics` directly to the
 internet. The local single-binary Loki instance is intended for development; use the
 organization's managed log platform or a production Loki deployment for scale and HA.

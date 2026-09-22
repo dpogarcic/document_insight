@@ -28,6 +28,16 @@ class ProcessingStage(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class ProcessingJobMetricsSnapshot:
+    """Content-free aggregate state from the authoritative processing-job ledger."""
+
+    counts_by_status: tuple[tuple[JobStatus, int], ...]
+    oldest_queued_age_seconds: float
+    oldest_processing_age_seconds: float
+    retry_scheduled_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class JobRecord:
     """Job data loaded from persistence without related document projections."""
 

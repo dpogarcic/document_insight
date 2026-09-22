@@ -11,7 +11,7 @@ import random
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from document_insight.application.jobs.models import JobRecord, ProcessingJob
+from document_insight.application.jobs.models import ProcessingJob
 from document_insight.application.processing.exceptions import (
     EmbeddingError,
     NerError,
@@ -19,6 +19,10 @@ from document_insight.application.processing.exceptions import (
     UnsupportedProcessingMediaTypeError,
 )
 from document_insight.infrastructure.job.protocol import JobRepository
+from document_insight.infrastructure.observability.processing_job_metrics import (
+    INGESTION_JOB_EVENTS,
+    INGESTION_TERMINAL_FAILURES,
+)
 from document_insight.infrastructure.queue.protocol import ProcessingQueue
 
 logger = logging.getLogger(__name__)
@@ -62,7 +66,7 @@ class RetryConfig:
         """
         base = min(
             self.max_backoff_seconds,
-            int(self.base_backoff_seconds * (self.backoff_multiplier ** attempt)),
+            int(self.base_backoff_seconds * (self.backoff_multiplier**attempt)),
         )
         jitter_range = base * self.jitter_factor
         jitter = random.uniform(-jitter_range, jitter_range)
@@ -147,6 +151,8 @@ class RetryCoordinator:
                 error_category="permanent",
                 failure_reason="max_attempts_reached",
             )
+            INGESTION_JOB_EVENTS.labels(outcome="failed").inc()
+            INGESTION_TERMINAL_FAILURES.labels(error_code="max_attempts_reached").inc()
             logger.error(
                 "processing job %s marked failed: max_attempts_reached "
                 "(attempt %d/%d, category permanent)",
@@ -172,6 +178,7 @@ class RetryCoordinator:
             next_retry_at,
             error_category="transient",
         )
+        INGESTION_JOB_EVENTS.labels(outcome="retry_scheduled").inc()
 
         # Re-enqueue in the queue so the worker picks it up after backoff
         if self._queue is not None:
@@ -179,12 +186,16 @@ class RetryCoordinator:
                 await self._queue.re_enqueue_for_retry(
                     job.job_id, job.correlation_id, next_retry_at
                 )
-            except Exception as error:
+            except Exception:
                 logger.error(
-                    "failed to re-enqueue job %s for retry: %s",
-                    job.job_id,
-                    error,
-                    extra={"job_id": str(job.job_id)},
+                    "ingestion retry queue publication failed",
+                    extra={
+                        "operation": "ingestion",
+                        "stage": "retry_publication",
+                        "outcome": "error",
+                        "error_code": "queue_unavailable",
+                        "job_id": str(job.job_id),
+                    },
                 )
 
         logger.warning(
@@ -218,6 +229,8 @@ class RetryCoordinator:
             error_category="permanent",
             failure_reason=reason,
         )
+        INGESTION_JOB_EVENTS.labels(outcome="failed").inc()
+        INGESTION_TERMINAL_FAILURES.labels(error_code=error_code).inc()
         logger.error(
             "processing job %s marked failed: %s (reason: %s)",
             job.job_id,

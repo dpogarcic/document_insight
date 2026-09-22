@@ -16,9 +16,10 @@ class QueryRequest(ApiModel):
     question: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)
     ]
-    filter: Annotated[
-        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)
-    ] | None = None
+    filter: (
+        Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
+        | None
+    ) = None
     top_k: Annotated[int, Field(ge=1, le=20)] = 5
 
 

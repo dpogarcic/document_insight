@@ -7,7 +7,10 @@ import re
 from pydantic import BaseModel, ConfigDict, Field
 
 from document_insight.application.configuration.models import GenerationConfiguration
-from document_insight.application.query.exceptions import InvalidGroundingError
+from document_insight.application.query.exceptions import (
+    InvalidGroundingError,
+    QueryProviderUnavailableError,
+)
 from document_insight.infrastructure.generation.protocol import (
     GroundedAnswer,
     GroundedAnswerGenerator,
@@ -15,6 +18,7 @@ from document_insight.infrastructure.generation.protocol import (
     GroundingPassage,
 )
 from document_insight.infrastructure.mistral.agents import MistralStructuredAgentClient
+from document_insight.infrastructure.observability.provider_metrics import ProviderCallMetrics
 
 _INTERNAL_CITATION_MARKER = re.compile(
     r"\s*\(\s*chunk_id\s*:\s*[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\s*\)",
@@ -46,6 +50,7 @@ class MistralGroundedAnswerGenerator(GroundedAnswerGenerator):
         configuration: GenerationConfiguration,
     ) -> GroundedAnswer:
         """Generate a cited answer and reject references outside the passage set."""
+        metrics = ProviderCallMetrics("mistral", "generation")
         input_text = json.dumps(
             {
                 "question": question,
@@ -64,20 +69,24 @@ class MistralGroundedAnswerGenerator(GroundedAnswerGenerator):
             "chunk IDs, citation markers, or internal identifiers in the answer text."
         )
         for attempt in range(2):
-            response = await self._client.complete(
-                name="Evidence-grounded answer generator",
-                instructions=(
-                    instructions
-                    if attempt == 0
-                    else instructions
-                    + " Your previous citation positions were invalid. Return only valid positions."
-                ),
-                input_text=input_text,
-                model_name=configuration.model,
-                output_type=_Response,
-                temperature=configuration.temperature,
-                max_output_tokens=configuration.max_output_tokens,
-            )
+            try:
+                response = await self._client.complete(
+                    name="Evidence-grounded answer generator",
+                    instructions=(
+                        instructions
+                        if attempt == 0
+                        else instructions
+                        + " Your previous citation positions were invalid. Return only valid positions."
+                    ),
+                    input_text=input_text,
+                    model_name=configuration.model,
+                    output_type=_Response,
+                    temperature=configuration.temperature,
+                    max_output_tokens=configuration.max_output_tokens,
+                )
+            except QueryProviderUnavailableError:
+                metrics.retryable_failure("provider_unavailable")
+                raise
             cited_indices = response.cited_passage_indices
             if all(1 <= index <= len(passages) for index in cited_indices):
                 break
@@ -86,10 +95,12 @@ class MistralGroundedAnswerGenerator(GroundedAnswerGenerator):
                 extra={"attempt": attempt + 1, "passage_count": len(passages)},
             )
         else:
+            metrics.failure("invalid_grounding")
             raise InvalidGroundingError
         cited_chunk_ids = tuple(
             dict.fromkeys(passages[index - 1].chunk_id for index in cited_indices)
         )
+        metrics.success()
         return GroundedAnswer(
             _INTERNAL_CITATION_MARKER.sub("", response.answer).strip(),
             cited_chunk_ids,

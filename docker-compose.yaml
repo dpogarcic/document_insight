@@ -17,6 +17,7 @@ services:
       - REDIS_URL=${REDIS_URL:?Set REDIS_URL in .env}
       - RQ_INGESTION_QUEUE_NAME=ingestion
       - METRICS_BEARER_TOKEN=${METRICS_BEARER_TOKEN:-}
+      - PROMETHEUS_MULTIPROC_DIR=/run/prometheus-multiproc
     depends_on:
       database:
         condition: service_healthy
@@ -26,8 +27,11 @@ services:
         condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
+      prometheus-multiproc-init:
+        condition: service_completed_successfully
     volumes:
       - ./src:/app/src
+      - prometheus-multiproc:/run/prometheus-multiproc
     command: >
       uv run --no-sync uvicorn --host 0.0.0.0 --port 8000 "src.document_insight.api.app:app"
 
@@ -94,12 +98,21 @@ services:
         condition: service_healthy
     restart: "no"
 
+  prometheus-multiproc-init:
+    image: busybox:1.37.0
+    command: ["sh", "-c", "rm -f /run/prometheus-multiproc/*.db"]
+    volumes:
+      - prometheus-multiproc:/run/prometheus-multiproc
+    restart: "no"
+
   # Worker service for background jobs
   worker:
     build: .
     image: document-insight-worker:latest
     command: >
-      uv run --no-sync rq worker --with-scheduler --url redis://redis:6379/0 ingestion
+      uv run --no-sync rq worker --with-scheduler
+      --worker-class document_insight.worker.monitored.MonitoredWorker
+      --url redis://redis:6379/0 ingestion
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
       REDIS_URL: ${REDIS_URL:?Set REDIS_URL in .env}
@@ -110,6 +123,7 @@ services:
       S3_REGION: ${S3_REGION:?Set S3_REGION in .env}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:?Set MISTRAL_API_KEY in .env}
+      PROMETHEUS_MULTIPROC_DIR: /run/prometheus-multiproc
     depends_on:
       database:
         condition: service_healthy
@@ -121,6 +135,11 @@ services:
         condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
+      prometheus-multiproc-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./src:/app/src
+      - prometheus-multiproc:/run/prometheus-multiproc
 
   reconciler:
     build: .
@@ -132,6 +151,7 @@ services:
       RQ_INGESTION_QUEUE_NAME: ingestion
       JOB_RECONCILIATION_INTERVAL_SECONDS: ${JOB_RECONCILIATION_INTERVAL_SECONDS:-60}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
+      PROMETHEUS_MULTIPROC_DIR: /run/prometheus-multiproc
     depends_on:
       database:
         condition: service_healthy
@@ -139,6 +159,11 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      prometheus-multiproc-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./src:/app/src
+      - prometheus-multiproc:/run/prometheus-multiproc
 
   monitoring-token-init:
     image: busybox:1.37.0
@@ -146,7 +171,7 @@ services:
     environment:
       METRICS_BEARER_TOKEN: ${METRICS_BEARER_TOKEN:-}
     command: >
-      sh -c 'umask 077 && printf "%s" "$$METRICS_BEARER_TOKEN" > /run/monitoring/metrics_bearer_token'
+      sh -c 'umask 077 && printf "%s" "$$METRICS_BEARER_TOKEN" > /run/monitoring/metrics_bearer_token && chmod 0444 /run/monitoring/metrics_bearer_token'
     volumes:
       - monitoring-secrets:/run/monitoring
     restart: "no"
@@ -225,3 +250,4 @@ volumes:
   loki-data:
   grafana-data:
   monitoring-secrets:
+  prometheus-multiproc:

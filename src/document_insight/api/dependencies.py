@@ -47,6 +47,7 @@ from document_insight.infrastructure.index_generation.repository import (
 from document_insight.infrastructure.job.repository import SqlAlchemyJobRepository
 from document_insight.infrastructure.mistral.embedding import MistralTextEmbedderFactory
 from document_insight.infrastructure.object_storage.s3 import S3OriginalObjectStorage
+from document_insight.infrastructure.observability.query_metrics import PrometheusQueryMetrics
 from document_insight.infrastructure.query_profile.repository import (
     SqlAlchemyQueryProfileRepository,
 )
@@ -228,4 +229,5 @@ def get_query_preparation_service(
             settings.mistral_base_url,
             _mistral_api_key(settings),
         ),
+        metrics=PrometheusQueryMetrics(),
     )

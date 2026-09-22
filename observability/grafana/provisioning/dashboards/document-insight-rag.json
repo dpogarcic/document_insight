@@ -1,0 +1,17 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "panels": [
+    {"datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []}, "gridPos": {"h": 9, "w": 12, "x": 0, "y": 0}, "id": 1, "targets": [{"expr": "1000 * histogram_quantile(0.95, sum(rate(document_insight_rag_stage_duration_seconds_bucket[5m])) by (le, stage))", "legendFormat": "{{stage}}", "refId": "A"}], "title": "RAG stage p95 duration", "type": "timeseries"},
+    {"datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []}, "gridPos": {"h": 9, "w": 12, "x": 12, "y": 0}, "id": 2, "targets": [{"expr": "1000 * histogram_quantile(0.95, sum(rate(document_insight_rag_query_duration_seconds_bucket[5m])) by (le, outcome))", "legendFormat": "{{outcome}}", "refId": "A"}], "title": "RAG end-to-end p95 duration", "type": "timeseries"},
+    {"datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}, "gridPos": {"h": 9, "w": 12, "x": 0, "y": 9}, "id": 3, "targets": [{"expr": "sum(rate(document_insight_rag_insufficient_evidence_total[5m])) by (reason)", "legendFormat": "{{reason}}", "refId": "A"}], "title": "RAG insufficient-evidence rate", "type": "timeseries"},
+    {"datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}, "gridPos": {"h": 9, "w": 12, "x": 12, "y": 9}, "id": 4, "targets": [{"expr": "histogram_quantile(0.95, sum(rate(document_insight_rag_candidate_count_bucket[5m])) by (le, stage))", "legendFormat": "{{stage}}", "refId": "A"}], "title": "RAG candidate-count p95", "type": "timeseries"}
+  ],
+  "schemaVersion": 41,
+  "tags": ["document-insight", "rag", "observability"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "title": "Document Insight RAG",
+  "uid": "document-insight-rag",
+  "version": 1
+}

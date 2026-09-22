@@ -5,6 +5,6 @@ providers:
     orgId: 1
     folder: Document Insight
     type: file
-    disableDeletion: true
+    disableDeletion: false
     options:
       path: /etc/grafana/provisioning/dashboards

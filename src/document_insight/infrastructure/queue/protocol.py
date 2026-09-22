@@ -1,7 +1,7 @@
 """Protocol for publishing durable processing jobs."""
 
+from datetime import datetime
 from typing import Protocol
-from datetime import UTC, datetime
 from uuid import UUID
 
 

@@ -9,6 +9,10 @@ from document_insight.application.processing.retry import RetryConfig
 from document_insight.infrastructure.database.transaction import TransactionManager
 from document_insight.infrastructure.document_version.protocol import DocumentVersionRepository
 from document_insight.infrastructure.job.protocol import JobRepository
+from document_insight.infrastructure.observability.processing_job_metrics import (
+    INGESTION_JOB_EVENTS,
+    INGESTION_RECONCILIATION_EVENTS,
+)
 from document_insight.infrastructure.queue.protocol import ProcessingQueue
 
 logger = logging.getLogger(__name__)
@@ -91,4 +95,9 @@ class ProcessingJobReconciler:
                     "exhausted_count": len(exhausted_versions),
                 },
             )
+        if requeued_count:
+            INGESTION_JOB_EVENTS.labels(outcome="recovered").inc(requeued_count)
+        if exhausted_versions:
+            INGESTION_JOB_EVENTS.labels(outcome="stale_exhausted").inc(len(exhausted_versions))
+        INGESTION_RECONCILIATION_EVENTS.labels(outcome="success").inc()
         return ReconciliationResult(requeued_count, len(exhausted_versions))

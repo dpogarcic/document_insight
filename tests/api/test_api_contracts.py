@@ -96,7 +96,10 @@ def test_server_log_formatter_always_outputs_correlation_id() -> None:
     record.__dict__["correlation_id"] = "-"
     formatter = CorrelationIdFormatter(logging.Formatter("%(message)s"))
 
-    assert formatter.format(record) == "correlation_id=- Example log"
+    assert formatter.format(record) == (
+        '{"correlation_id":"-","level":"INFO","logger":"document_insight.test",'
+        '"message":"Example log"}'
+    )
 
 
 @pytest.mark.anyio

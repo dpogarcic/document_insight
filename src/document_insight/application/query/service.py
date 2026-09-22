@@ -1,5 +1,6 @@
 """Execute authorization-first hybrid retrieval and evidence-grounded generation."""
 
+from time import perf_counter
 from uuid import UUID
 
 from document_insight.application.auth.models import UserRole
@@ -14,6 +15,7 @@ from document_insight.application.query.exceptions import (
     QueryProfileUnavailableError,
     QueryProviderUnavailableError,
 )
+from document_insight.application.query.metrics import NullQueryMetrics, QueryMetrics
 from document_insight.application.query.models import (
     AuthorizedRetrievalRequest,
     QueryCitation,
@@ -50,6 +52,7 @@ class QueryPreparationService:
         embedders: TextEmbedderFactory,
         rerankers: RerankerFactory,
         generators: GroundedAnswerGeneratorFactory,
+        metrics: QueryMetrics | None = None,
     ) -> None:
         self._active_profiles = active_profiles
         self._profile_resolver = profile_resolver
@@ -58,6 +61,7 @@ class QueryPreparationService:
         self._embedders = embedders
         self._rerankers = rerankers
         self._generators = generators
+        self._metrics = metrics or NullQueryMetrics()
 
     async def prepare(self, command: PrepareQueryCommand) -> AuthorizedRetrievalRequest:
         """Build an authorization-bounded request without reading chunks or invoking models."""
@@ -85,70 +89,115 @@ class QueryPreparationService:
 
     async def query(self, command: PrepareQueryCommand) -> QueryResult:
         """Run all retrieval branches under one immutable profile and trusted scope."""
-        prepared = await self.prepare(command)
-        profile = await self._profile_resolver.resolve(prepared.query_profile_id)
-        scope = RetrievalScope(prepared.tenant_id, prepared.department_ids)
-        entity_matches = await self._entity_matches(scope, prepared.filter_text, profile.retrieval)
-        lexical_query = " ".join(
-            value for value in (prepared.question, prepared.filter_text) if value
-        )
-        lexical_results: list[tuple[RetrievedChunk, ...]] = []
-        for cohort in profile.lexical_profile_ids:
-            lexical_results.append(
-                await self._retrieval.lexical_search(
-                    scope, cohort, lexical_query, profile.retrieval.lexical_candidate_limit
-                )
-            )
-        lexical_lists = tuple(lexical_results)
-        vector_lists = await self._vector_lists(prepared.question, scope, profile)
-        fused = self._fuse(
-            (*lexical_lists, *vector_lists),
-            {match.document_version_id for match in entity_matches},
-            profile.retrieval.rrf_k,
-            profile.retrieval.entity_match_boost,
-        )
-        reranked = await self._rerank(
-            prepared.question, fused, profile.retrieval.rerank_candidate_limit, profile
-        )
-        selected = reranked[: prepared.top_k]
-        if not selected or selected[0][1] < profile.retrieval.insufficient_evidence_threshold:
-            return self._insufficient_evidence()
-        citable = tuple(
-            item for item in selected if item[1] >= profile.retrieval.min_citation_score
-        )
-        if not citable:
-            return self._insufficient_evidence()
+        query_started_at = perf_counter()
+        query_outcome = "error"
         try:
-            answer = await self._generate(prepared.question, citable, profile)
-        except InvalidGroundingError:
-            return self._insufficient_evidence()
-        by_id = {chunk.chunk_id: (chunk, score) for chunk, score in citable}
-        cited = tuple(by_id[chunk_id] for chunk_id in answer.cited_chunk_ids if chunk_id in by_id)
-        if not cited:
-            raise QueryProviderUnavailableError
-        citations = tuple(
-            QueryCitation(
-                chunk.document_id,
-                chunk.document_version_id,
-                chunk.chunk_id,
-                chunk.page_number,
-                chunk.text,
-                score,
+            prepared = await self.prepare(command)
+            profile = await self._profile_resolver.resolve(prepared.query_profile_id)
+            scope = RetrievalScope(prepared.tenant_id, prepared.department_ids)
+            entity_matches = await self._entity_matches(
+                scope, prepared.filter_text, profile.retrieval
             )
-            for chunk, score in cited
-        )
-        cited_versions = {citation.document_version_id for citation in citations}
-        entities = tuple(
-            QueryEntity(match.document_version_id, match.display_value, match.label)
-            for match in entity_matches
-            if match.document_version_id in cited_versions
-        )
-        confidence = max(score for _, score in cited)
-        return QueryResult(answer.answer, confidence, citations, entities)
+            lexical_query = " ".join(
+                value for value in (prepared.question, prepared.filter_text) if value
+            )
+            lexical_started_at = perf_counter()
+            try:
+                lexical_results: list[tuple[RetrievedChunk, ...]] = []
+                for cohort in profile.lexical_profile_ids:
+                    lexical_results.append(
+                        await self._retrieval.lexical_search(
+                            scope, cohort, lexical_query, profile.retrieval.lexical_candidate_limit
+                        )
+                    )
+            except Exception:
+                self._observe_stage_duration("lexical_retrieval", "error", lexical_started_at)
+                raise
+            self._observe_stage_duration("lexical_retrieval", "success", lexical_started_at)
+            lexical_lists = tuple(lexical_results)
+            self._metrics.observe_candidate_count(
+                "lexical_retrieval", sum(len(candidates) for candidates in lexical_lists)
+            )
+            vector_lists = await self._vector_lists(prepared.question, scope, profile)
+            self._metrics.observe_candidate_count(
+                "vector_retrieval", sum(len(candidates) for candidates in vector_lists)
+            )
+            fusion_started_at = perf_counter()
+            try:
+                fused = self._fuse(
+                    (*lexical_lists, *vector_lists),
+                    {match.document_version_id for match in entity_matches},
+                    profile.retrieval.rrf_k,
+                    profile.retrieval.entity_match_boost,
+                )
+            except Exception:
+                self._observe_stage_duration("rrf_fusion", "error", fusion_started_at)
+                raise
+            self._observe_stage_duration("rrf_fusion", "success", fusion_started_at)
+            self._metrics.observe_candidate_count("rrf_fusion", len(fused))
+            reranked = await self._rerank(
+                prepared.question, fused, profile.retrieval.rerank_candidate_limit, profile
+            )
+            self._metrics.observe_candidate_count("reranking", len(reranked))
+            evidence_started_at = perf_counter()
+            selected = reranked[: prepared.top_k]
+            if not selected or selected[0][1] < profile.retrieval.insufficient_evidence_threshold:
+                self._metrics.observe_candidate_count("evidence_selection", 0)
+                self._observe_stage_duration(
+                    "evidence_selection", "insufficient", evidence_started_at
+                )
+                query_outcome = "insufficient_evidence"
+                return self._insufficient_evidence("below_evidence_threshold")
+            citable = tuple(
+                item for item in selected if item[1] >= profile.retrieval.min_citation_score
+            )
+            self._metrics.observe_candidate_count("evidence_selection", len(citable))
+            if not citable:
+                self._observe_stage_duration(
+                    "evidence_selection", "insufficient", evidence_started_at
+                )
+                query_outcome = "insufficient_evidence"
+                return self._insufficient_evidence("below_citation_threshold")
+            self._observe_stage_duration("evidence_selection", "success", evidence_started_at)
+            try:
+                answer = await self._generate(prepared.question, citable, profile)
+            except InvalidGroundingError:
+                query_outcome = "insufficient_evidence"
+                return self._insufficient_evidence("invalid_grounding")
+            by_id = {chunk.chunk_id: (chunk, score) for chunk, score in citable}
+            cited = tuple(
+                by_id[chunk_id] for chunk_id in answer.cited_chunk_ids if chunk_id in by_id
+            )
+            if not cited:
+                raise QueryProviderUnavailableError
+            citations = tuple(
+                QueryCitation(
+                    chunk.document_id,
+                    chunk.document_version_id,
+                    chunk.chunk_id,
+                    chunk.page_number,
+                    chunk.text,
+                    score,
+                )
+                for chunk, score in cited
+            )
+            cited_versions = {citation.document_version_id for citation in citations}
+            entities = tuple(
+                QueryEntity(match.document_version_id, match.display_value, match.label)
+                for match in entity_matches
+                if match.document_version_id in cited_versions
+            )
+            confidence = max(score for _, score in cited)
+            self._metrics.observe_citation_count(len(citations))
+            self._metrics.observe_evidence_confidence(confidence)
+            query_outcome = "grounded"
+            return QueryResult(answer.answer, confidence, citations, entities)
+        finally:
+            self._metrics.observe_query_duration(query_outcome, perf_counter() - query_started_at)
 
-    @staticmethod
-    def _insufficient_evidence() -> QueryResult:
+    def _insufficient_evidence(self, reason: str) -> QueryResult:
         """Return the single safe response for absent or ungroundable evidence."""
+        self._metrics.increment_insufficient_evidence(reason)
         return QueryResult(
             "The information is not available in your authorized documents.", 0.0, (), ()
         )
@@ -172,17 +221,31 @@ class QueryPreparationService:
         """Embed once per compatible cohort and never compare raw cross-cohort scores."""
         result: list[tuple[RetrievedChunk, ...]] = []
         for profile_id, configuration in profile.embedding_configurations:
+            embedding_started_at = perf_counter()
             try:
                 vector = (
                     await self._embedders.create(configuration).embed((question,), configuration)
                 )[0]
             except (EmbeddingError, IndexError, ValueError) as error:
+                self._observe_stage_duration("query_embedding", "error", embedding_started_at)
                 raise QueryProviderUnavailableError from error
-            result.append(
-                await self._retrieval.vector_search(
-                    scope, profile_id, vector, profile.retrieval.vector_candidate_limit
+            except Exception:
+                self._observe_stage_duration("query_embedding", "error", embedding_started_at)
+                raise
+            self._observe_stage_duration("query_embedding", "success", embedding_started_at)
+            vector_retrieval_started_at = perf_counter()
+            try:
+                result.append(
+                    await self._retrieval.vector_search(
+                        scope, profile_id, vector, profile.retrieval.vector_candidate_limit
+                    )
                 )
-            )
+            except Exception:
+                self._observe_stage_duration(
+                    "vector_retrieval", "error", vector_retrieval_started_at
+                )
+                raise
+            self._observe_stage_duration("vector_retrieval", "success", vector_retrieval_started_at)
         return tuple(result)
 
     @staticmethod
@@ -227,8 +290,10 @@ class QueryPreparationService:
         profile: ResolvedQueryProfile,
     ) -> tuple[tuple[RetrievedChunk, float], ...]:
         """Rerank only authorized fused candidates, then apply the configured cap."""
+        reranking_started_at = perf_counter()
         capped = candidates[:limit]
         if not capped:
+            self._observe_stage_duration("reranking", "success", reranking_started_at)
             return ()
         try:
             scores = await self._rerankers.create(profile.reranking).rerank(
@@ -237,7 +302,12 @@ class QueryPreparationService:
                 profile.reranking,
             )
         except ValueError as error:
+            self._observe_stage_duration("reranking", "error", reranking_started_at)
             raise QueryProviderUnavailableError from error
+        except Exception:
+            self._observe_stage_duration("reranking", "error", reranking_started_at)
+            raise
+        self._observe_stage_duration("reranking", "success", reranking_started_at)
         by_id = {score.chunk_id: score.score for score in scores}
         return tuple(
             sorted(
@@ -253,11 +323,25 @@ class QueryPreparationService:
         profile: ResolvedQueryProfile,
     ) -> GroundedAnswer:
         """Send only selected authorized passages to the profile-selected generator."""
+        generation_started_at = perf_counter()
         try:
-            return await self._generators.create(profile.generation).generate(
+            answer = await self._generators.create(profile.generation).generate(
                 question,
                 tuple(GroundingPassage(chunk.chunk_id, chunk.text) for chunk, _ in selected),
                 profile.generation,
             )
+        except InvalidGroundingError:
+            self._observe_stage_duration("generation", "invalid_grounding", generation_started_at)
+            raise
         except ValueError as error:
+            self._observe_stage_duration("generation", "error", generation_started_at)
             raise QueryProviderUnavailableError from error
+        except Exception:
+            self._observe_stage_duration("generation", "error", generation_started_at)
+            raise
+        self._observe_stage_duration("generation", "success", generation_started_at)
+        return answer
+
+    def _observe_stage_duration(self, stage: str, outcome: str, started_at: float) -> None:
+        """Record elapsed wall-clock time for one stage with a fixed label vocabulary."""
+        self._metrics.observe_stage_duration(stage, outcome, perf_counter() - started_at)

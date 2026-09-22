@@ -1,0 +1,14 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "panels": [
+    {"datasource": {"type": "loki", "uid": "loki"}, "fieldConfig": {"defaults": {}, "overrides": []}, "gridPos": {"h": 20, "w": 24, "x": 0, "y": 0}, "id": 1, "options": {"dedupStrategy": "none", "enableLogDetails": true, "prettifyJSON": true, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true}, "targets": [{"expr": "{service=~\"$service\"}", "refId": "A"}], "title": "Docker logs", "type": "logs"}
+  ],
+  "schemaVersion": 41,
+  "tags": ["document-insight", "logs", "observability"],
+  "templating": {"list": [{"current": {"text": "All", "value": ".+"}, "datasource": {"type": "loki", "uid": "loki"}, "definition": "label_values(service)", "includeAll": true, "label": "Service", "multi": false, "name": "service", "options": [], "query": "label_values(service)", "refresh": 1, "type": "query", "allValue": ".+"}]},
+  "time": {"from": "now-24h", "to": "now"},
+  "title": "Document Insight Logs",
+  "uid": "document-insight-logs",
+  "version": 1
+}

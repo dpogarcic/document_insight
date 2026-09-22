@@ -74,19 +74,26 @@ class MistralStructuredAgentClient:
                 ):
                     delay = retry_delay_seconds(attempt)
                     logger.info(
-                        "Mistral rate limit retry: model=%s attempt=%s delay_seconds=%.1f",
-                        model_name,
-                        attempt + 1,
-                        delay,
+                        "provider request retry scheduled",
+                        extra={
+                            "operation": "provider_request",
+                            "stage": "completion",
+                            "outcome": "retry_scheduled",
+                            "error_code": "rate_limited",
+                            "provider": "mistral",
+                        },
                     )
                     await self._sleep(delay)
                     continue
                 logger.warning(
-                    "Mistral structured completion failed: model=%s error_type=%s status=%s code=%s",
-                    model_name,
-                    type(error).__name__,
-                    getattr(error, "status_code", None),
-                    getattr(error, "code", None),
+                    "provider request failed",
+                    extra={
+                        "operation": "provider_request",
+                        "stage": "completion",
+                        "outcome": "error",
+                        "error_code": "provider_unavailable",
+                        "provider": "mistral",
+                    },
                 )
                 raise QueryProviderUnavailableError from error
         output = getattr(result, "final_output", None)

@@ -4,7 +4,14 @@ import hmac
 from time import perf_counter
 
 from fastapi import HTTPException, Request, Response, status
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    CollectorRegistry,
+    Counter,
+    Histogram,
+    generate_latest,
+    multiprocess,
+)
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from document_insight.config import Settings
@@ -50,6 +57,16 @@ class PrometheusMetricsMiddleware:
 
 def metrics_response(request: Request, settings: Settings) -> Response:
     """Return metrics only to a caller holding the configured monitoring secret."""
+    authorize_metrics_request(request, settings)
+    if settings.prometheus_multiproc_dir is None:
+        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    registry = CollectorRegistry()
+    multiprocess.MultiProcessCollector(registry)  # type: ignore[no-untyped-call]  # lacks stubs
+    return Response(generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
+
+
+def authorize_metrics_request(request: Request, settings: Settings) -> None:
+    """Reject metric scrapes that do not carry the configured monitoring secret."""
     configured_token = settings.metrics_bearer_token
     if configured_token is None or not configured_token.get_secret_value():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
@@ -57,4 +74,3 @@ def metrics_response(request: Request, settings: Settings) -> Response:
     expected_header = f"Bearer {configured_token.get_secret_value()}"
     if not hmac.compare_digest(supplied_header, expected_header):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

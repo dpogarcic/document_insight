@@ -20,7 +20,12 @@ class GroundedAnswer:
 
 
 class GroundedAnswerGenerator(Protocol):
-    async def generate(self, question: str, passages: tuple[GroundingPassage, ...], configuration: GenerationConfiguration) -> GroundedAnswer: ...
+    async def generate(
+        self,
+        question: str,
+        passages: tuple[GroundingPassage, ...],
+        configuration: GenerationConfiguration,
+    ) -> GroundedAnswer: ...
 
 
 class GroundedAnswerGeneratorFactory(Protocol):

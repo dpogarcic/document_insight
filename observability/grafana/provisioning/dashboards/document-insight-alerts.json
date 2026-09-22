@@ -1,0 +1,15 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "panels": [
+    {"gridPos": {"h": 12, "w": 24, "x": 0, "y": 0}, "id": 1, "options": {"viewMode": "list", "groupMode": "default", "maxItems": 100, "sortOrder": 1, "dashboardAlerts": false, "stateFilter": {"firing": true, "pending": true, "noData": true, "normal": false, "error": true}}, "title": "Active Grafana alerts", "type": "alertlist"},
+    {"gridPos": {"h": 13, "w": 24, "x": 0, "y": 12}, "id": 2, "options": {"content": "## Configured alert rules\n\n| Area | Rules |\n| --- | --- |\n| API | `DocumentInsightApiUnavailable`; `DocumentInsightApiHigh5xxRatio` |\n| RAG and providers | `DocumentInsightProviderFailures`; `DocumentInsightProviderRateLimited`; `DocumentInsightProviderSlow`; `DocumentInsightRagSlow` |\n| Ingestion | `DocumentInsightIngestionBacklog`; `DocumentInsightIngestionRetries`; `DocumentInsightTerminalIngestionFailures`; `DocumentInsightReconciliationFailures`; `DocumentInsightStaleJobsExhausted`; `DocumentInsightWorkerHeartbeatStale`; `DocumentInsightReconcilerStale`; `DocumentInsightProcessingStalled` |\n| Runtime | `DocumentInsightContainerCpuSaturated`; `DocumentInsightContainerMemoryNearLimit`; `DocumentInsightContainerDiskNearLimit`; `DocumentInsightContainerNetworkErrors` |\n\nGrafana evaluates these rules against Prometheus. The list above shows pending, firing, no-data, and error states. See **Alerting → Alert rules** for every configured rule, including healthy rules. Notification contact points and policies are a separate later step.", "mode": "markdown"}, "pluginVersion": "12.4.0", "title": "Configured coverage", "type": "text"}
+  ],
+  "schemaVersion": 41,
+  "tags": ["document-insight", "alerts", "observability"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "title": "Document Insight Alerts",
+  "uid": "document-insight-alerts",
+  "version": 1
+}

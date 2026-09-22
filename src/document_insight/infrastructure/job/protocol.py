@@ -5,7 +5,12 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from document_insight.application.jobs.models import JobRecord, ProcessingJob, RequeueJob
+from document_insight.application.jobs.models import (
+    JobRecord,
+    ProcessingJob,
+    ProcessingJobMetricsSnapshot,
+    RequeueJob,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,3 +82,6 @@ class JobRepository(Protocol):
         self, now: datetime, stale_before: datetime, max_attempts: int
     ) -> tuple[UUID, ...]:
         """Fail stale in-progress jobs that have exhausted their retry budget."""
+
+    async def get_metrics_snapshot(self, now: datetime) -> ProcessingJobMetricsSnapshot:
+        """Return content-free aggregate state for operational metrics."""

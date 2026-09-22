@@ -3,10 +3,16 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from document_insight.application.jobs.models import JobRecord, JobStatus, ProcessingJob, RequeueJob
+from document_insight.application.jobs.models import (
+    JobRecord,
+    JobStatus,
+    ProcessingJob,
+    ProcessingJobMetricsSnapshot,
+    RequeueJob,
+)
 from document_insight.infrastructure.job.model import JobModel
 from document_insight.infrastructure.job.protocol import CreateJob, JobRepository
 
@@ -252,3 +258,39 @@ class SqlAlchemyJobRepository(JobRepository):
             .returning(JobModel.document_version_id)
         )
         return tuple(row.document_version_id for row in result)
+
+    async def get_metrics_snapshot(self, now: datetime) -> ProcessingJobMetricsSnapshot:
+        """Aggregate durable job status and age without selecting tenant-specific data."""
+        status_rows = (
+            await self._session.execute(
+                select(JobModel.status, func.count()).group_by(JobModel.status)
+            )
+        ).all()
+        counts_by_status = tuple((JobStatus(row[0]), int(row[1])) for row in status_rows)
+        oldest_queued_at = await self._session.scalar(
+            select(func.min(JobModel.created_at)).where(JobModel.status == JobStatus.QUEUED.value)
+        )
+        oldest_processing_at = await self._session.scalar(
+            select(func.min(JobModel.started_at)).where(
+                JobModel.status == JobStatus.PROCESSING.value
+            )
+        )
+        retry_scheduled_count = await self._session.scalar(
+            select(func.count()).where(
+                JobModel.status == JobStatus.QUEUED.value,
+                JobModel.next_retry_at.is_not(None),
+            )
+        )
+        return ProcessingJobMetricsSnapshot(
+            counts_by_status=counts_by_status,
+            oldest_queued_age_seconds=self._age_seconds(oldest_queued_at, now),
+            oldest_processing_age_seconds=self._age_seconds(oldest_processing_at, now),
+            retry_scheduled_count=retry_scheduled_count or 0,
+        )
+
+    @staticmethod
+    def _age_seconds(timestamp: datetime | None, now: datetime) -> float:
+        """Return a non-negative age, using zero when no matching job exists."""
+        if timestamp is None:
+            return 0.0
+        return max((now - timestamp).total_seconds(), 0.0)

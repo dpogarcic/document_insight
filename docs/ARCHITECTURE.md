@@ -178,7 +178,9 @@ for the profile, activation, and audit model.
 - An optional Compose observability profile starts Prometheus, cAdvisor, Loki, Grafana Alloy,
   and Grafana with persistent local volumes. Production reuses the scrape/log schema but must
   use secret-managed credentials, authenticated Grafana ingress, encrypted durable storage,
-  backups, retention, and alert routing. Prometheus, Loki, cAdvisor, Alloy, and `/metrics`
+  backups, retention, and Grafana contact-point routing. Grafana provisions and evaluates
+  alert rules against Prometheus; notification destinations are configured separately.
+  Prometheus, Loki, cAdvisor, Alloy, and `/metrics`
   remain private; the API's metrics endpoint requires a monitoring bearer token.
 - Configuration and secrets are external to application code.
 - The public API is stateless; workers can scale independently when a suitable runtime is selected.
@@ -203,3 +205,4 @@ for the profile, activation, and audit model.
 - [ADR 002: Async processing and versioning](adr/002-async-processing.md)
 - [ADR 003: Tenant isolation and security](adr/003-tenant-isolation.md)
 - [ADR 004: Capability configuration profiles](adr/004-capability-configuration-profiles.md)
+- [ADR 005: Observability](adr/005-observability.md)

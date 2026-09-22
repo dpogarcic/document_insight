@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from time import time
 
 from document_insight.api.logging_config import configure_server_logging
 from document_insight.application.processing.reconciliation import ProcessingJobReconciler
@@ -12,6 +13,10 @@ from document_insight.infrastructure.document_version.repository import (
     SqlAlchemyDocumentVersionRepository,
 )
 from document_insight.infrastructure.job.repository import SqlAlchemyJobRepository
+from document_insight.infrastructure.observability.processing_job_metrics import (
+    INGESTION_RECONCILER_LAST_SUCCESS,
+    INGESTION_RECONCILIATION_EVENTS,
+)
 from document_insight.infrastructure.queue.rq import RqProcessingQueue
 
 logger = logging.getLogger(__name__)
@@ -29,8 +34,18 @@ async def run_reconciler() -> None:
                     RqProcessingQueue(settings.redis_url, settings.rq_ingestion_queue_name),
                     SqlAlchemyTransactionManager(session),
                 ).reconcile()
+                INGESTION_RECONCILER_LAST_SUCCESS.set(time())
         except Exception:
-            logger.exception("processing job reconciliation failed")
+            INGESTION_RECONCILIATION_EVENTS.labels(outcome="error").inc()
+            logger.error(
+                "processing job reconciliation failed",
+                extra={
+                    "operation": "ingestion_reconciliation",
+                    "stage": "reconciliation",
+                    "outcome": "error",
+                    "error_code": "reconciliation_failed",
+                },
+            )
         await asyncio.sleep(settings.job_reconciliation_interval_seconds)
 
 

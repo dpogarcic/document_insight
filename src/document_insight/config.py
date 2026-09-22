@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     rq_ingestion_queue_name: str = "ingestion"
     job_reconciliation_interval_seconds: int = Field(default=60, ge=5, le=3600)
     metrics_bearer_token: SecretStr | None = None
+    prometheus_multiproc_dir: str | None = None
     mistral_base_url: str = "https://api.mistral.ai/v1"
     mistral_api_key: SecretStr | None = None
     cors_allowed_origins: tuple[str, ...] = (

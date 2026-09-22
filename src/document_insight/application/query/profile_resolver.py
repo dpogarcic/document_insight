@@ -48,10 +48,14 @@ class QueryProfileResolver:
                 )
             embeddings = tuple(embeddings_list)
             reranking = RerankingConfiguration.model_validate(
-                (await self._snapshot_for(profile.reranker_profile_id, Capability.RERANKING)).configuration
+                (
+                    await self._snapshot_for(profile.reranker_profile_id, Capability.RERANKING)
+                ).configuration
             )
             generation = GenerationConfiguration.model_validate(
-                (await self._snapshot_for(profile.generation_profile_id, Capability.GENERATION)).configuration
+                (
+                    await self._snapshot_for(profile.generation_profile_id, Capability.GENERATION)
+                ).configuration
             )
             retrieval_snapshot = await self._snapshots.get(profile.retrieval_snapshot_id)
             if retrieval_snapshot is None or retrieval_snapshot.capability != "retrieval":

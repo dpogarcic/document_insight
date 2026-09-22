@@ -1,5 +1,6 @@
 """Server logging configuration with an always-present correlation field."""
 
+import json
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -19,7 +20,26 @@ class CorrelationIdFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         """Render the original log format with a stable correlation field."""
         correlation_id = record.__dict__.get("correlation_id", "-")
-        return f"correlation_id={correlation_id} {self._delegate.format(record)}"
+        payload = {
+            "correlation_id": correlation_id,
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        for field in (
+            "operation",
+            "stage",
+            "outcome",
+            "error_code",
+            "duration_ms",
+            "provider",
+            "capability",
+            "job_id",
+        ):
+            value = record.__dict__.get(field)
+            if value is not None:
+                payload[field] = value
+        return json.dumps(payload, separators=(",", ":"))
 
 
 def configure_server_logging() -> None:

@@ -133,6 +133,34 @@ class Generators:
         return Generator()
 
 
+@dataclass
+class RecordingMetrics:
+    stage_durations: list[tuple[str, str]] = field(default_factory=list)
+    query_outcomes: list[str] = field(default_factory=list)
+    candidate_counts: list[tuple[str, int]] = field(default_factory=list)
+    insufficient_reasons: list[str] = field(default_factory=list)
+    citation_counts: list[int] = field(default_factory=list)
+    confidences: list[float] = field(default_factory=list)
+
+    def observe_stage_duration(self, stage: str, outcome: str, duration_seconds: float) -> None:
+        self.stage_durations.append((stage, outcome))
+
+    def observe_query_duration(self, outcome: str, duration_seconds: float) -> None:
+        self.query_outcomes.append(outcome)
+
+    def observe_candidate_count(self, stage: str, count: int) -> None:
+        self.candidate_counts.append((stage, count))
+
+    def increment_insufficient_evidence(self, reason: str) -> None:
+        self.insufficient_reasons.append(reason)
+
+    def observe_citation_count(self, count: int) -> None:
+        self.citation_counts.append(count)
+
+    def observe_evidence_confidence(self, confidence: float) -> None:
+        self.confidences.append(confidence)
+
+
 def build_profile(profile_id: UUID) -> ResolvedQueryProfile:
     embedding_id = uuid4()
     return ResolvedQueryProfile(
@@ -187,6 +215,7 @@ def build_service(
     department_ids: tuple[UUID, ...],
     chunk: RetrievedChunk | None,
     additional_chunk: RetrievedChunk | None = None,
+    metrics: RecordingMetrics | None = None,
 ) -> tuple[QueryPreparationService, Retrieval]:
     retrieval = Retrieval(chunk, additional_chunk)
     active_profile_id = profile_id or uuid4()
@@ -198,6 +227,7 @@ def build_service(
         embedders=Embedders(),
         rerankers=Rerankers(),
         generators=Generators(),
+        metrics=metrics,
     ), retrieval
 
 
@@ -234,6 +264,65 @@ async def test_query_returns_insufficient_evidence_without_generation() -> None:
     )
     assert result.confidence == 0.0
     assert result.citations == ()
+
+
+@pytest.mark.anyio
+async def test_query_records_only_safe_live_metrics_for_grounded_responses() -> None:
+    tenant_id, department_id, profile_id = (uuid4() for _ in range(3))
+    chunk = RetrievedChunk(uuid4(), uuid4(), uuid4(), "Contract", "Annual renewal.", 2, 0.8)
+    metrics = RecordingMetrics()
+    query_service, _ = build_service(profile_id, (department_id,), chunk, metrics=metrics)
+
+    await query_service.query(
+        PrepareQueryCommand(
+            "When does it renew?",
+            None,
+            5,
+            AuthorizationContext(uuid4(), tenant_id, (department_id,), UserRole.VIEWER),
+        )
+    )
+
+    assert metrics.query_outcomes == ["grounded"]
+    assert metrics.insufficient_reasons == []
+    assert metrics.citation_counts == [1]
+    assert metrics.confidences == [0.9]
+    assert {stage for stage, _ in metrics.stage_durations} == {
+        "lexical_retrieval",
+        "query_embedding",
+        "vector_retrieval",
+        "rrf_fusion",
+        "reranking",
+        "evidence_selection",
+        "generation",
+    }
+    assert dict(metrics.candidate_counts) == {
+        "lexical_retrieval": 1,
+        "vector_retrieval": 1,
+        "rrf_fusion": 1,
+        "reranking": 1,
+        "evidence_selection": 1,
+    }
+
+
+@pytest.mark.anyio
+async def test_query_records_a_bounded_reason_for_insufficient_evidence() -> None:
+    tenant_id, department_id, profile_id = (uuid4() for _ in range(3))
+    metrics = RecordingMetrics()
+    query_service, _ = build_service(profile_id, (department_id,), None, metrics=metrics)
+
+    await query_service.query(
+        PrepareQueryCommand(
+            "What changed?",
+            None,
+            5,
+            AuthorizationContext(uuid4(), tenant_id, (department_id,), UserRole.VIEWER),
+        )
+    )
+
+    assert metrics.query_outcomes == ["insufficient_evidence"]
+    assert metrics.insufficient_reasons == ["below_evidence_threshold"]
+    assert metrics.citation_counts == []
+    assert metrics.confidences == []
 
 
 @pytest.mark.anyio
