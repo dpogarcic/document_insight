@@ -55,20 +55,15 @@ uv sync --group dev
 cp .env.example .env
 ```
 
-Set `MISTRAL_API_KEY` in `.env`, then start PostgreSQL, pgvector, Redis, and the local
-S3-compatible object store before applying migrations:
+Set `MISTRAL_API_KEY` in `.env`, then start the complete local stack with one command:
 
 ```bash
-docker compose up -d database redis object-storage object-storage-init
-uv run alembic upgrade head
-docker compose up -d worker
+docker compose up --build
 ```
 
-Start the API:
-
-```bash
-uv run uvicorn document_insight.api.app:app --reload
-```
+Compose starts PostgreSQL/pgvector, Redis, MinIO and its bucket initialization, database
+migrations, the RQ worker, and the public API. Only the API is exposed on port `8000`;
+the supporting services remain private to the Compose network.
 
 OpenAPI documentation is available at `http://127.0.0.1:8000/docs`.
 
