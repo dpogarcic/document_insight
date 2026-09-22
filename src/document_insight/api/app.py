@@ -1,11 +1,12 @@
 """FastAPI application factory."""
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from document_insight import __version__
 from document_insight.api.exception_handlers import register_exception_handlers
 from document_insight.api.logging_config import configure_server_logging
+from document_insight.api.metrics import PrometheusMetricsMiddleware, metrics_response
 from document_insight.api.middleware.correlation_id import CorrelationIdMiddleware
 from document_insight.api.routes import api_router
 from document_insight.config import get_settings
@@ -31,7 +32,20 @@ def create_app() -> FastAPI:
     )
     register_exception_handlers(application)
     application.add_middleware(CorrelationIdMiddleware)
+    application.add_middleware(PrometheusMetricsMiddleware)
     application.include_router(api_router)
+
+    async def metrics_endpoint(request: Request) -> Response:
+        """Serve authenticated metrics to the private monitoring collector."""
+        return metrics_response(request, settings)
+
+    application.add_api_route(
+        "/metrics",
+        metrics_endpoint,
+        methods=["GET"],
+        response_class=Response,
+        include_in_schema=False,
+    )
     return application
 
 

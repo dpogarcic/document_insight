@@ -20,6 +20,11 @@ flowchart LR
     Q --> W[Processing worker]
     RC[Job reconciler] -->|republish durable work| Q
     RC --> DB
+    API -->|authenticated metrics| PM[Prometheus]
+    CA[cAdvisor] --> PM
+    AL[Grafana Alloy] --> LK[Loki]
+    PM --> GF[Grafana]
+    LK --> GF
     W --> OBJ
     W --> DB
     API --> R[Retrieval and AI provider layer]
@@ -38,6 +43,7 @@ flowchart LR
 | Redis / RQ | Delivers asynchronous processing jobs; PostgreSQL remains authoritative for job state. |
 | Processing worker | Performs parsing/OCR, language detection, NER, chunking, embedding, lexical indexing, and ready-state transitions. |
 | Job reconciler | Periodically recovers durable jobs that Redis did not receive, stale transient processing jobs, and retryable transient failures. It never retries permanent failures or exhausted jobs. |
+| Observability stack | Prometheus scrapes authenticated API and cAdvisor metrics; Grafana Alloy collects Docker logs into Loki; Grafana provides the authenticated UI. These services are private except for an authenticated Grafana ingress. |
 | Retrieval and AI provider layer | Selects explicit providers and implements authorized hybrid retrieval, reranking, evidence-grounded generation, and citations. |
 
 ## Data flow
@@ -169,6 +175,11 @@ for the profile, activation, and audit model.
 - Every component runs in a container.
 - Docker Compose starts the local API, processing worker, job reconciler, PostgreSQL/search
   extensions, Redis, and object storage.
+- An optional Compose observability profile starts Prometheus, cAdvisor, Loki, Grafana Alloy,
+  and Grafana with persistent local volumes. Production reuses the scrape/log schema but must
+  use secret-managed credentials, authenticated Grafana ingress, encrypted durable storage,
+  backups, retention, and alert routing. Prometheus, Loki, cAdvisor, Alloy, and `/metrics`
+  remain private; the API's metrics endpoint requires a monitoring bearer token.
 - Configuration and secrets are external to application code.
 - The public API is stateless; workers can scale independently when a suitable runtime is selected.
 

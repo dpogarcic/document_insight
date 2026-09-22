@@ -16,6 +16,7 @@ services:
       - S3_REGION=${S3_REGION:?Set S3_REGION in .env}
       - REDIS_URL=${REDIS_URL:?Set REDIS_URL in .env}
       - RQ_INGESTION_QUEUE_NAME=ingestion
+      - METRICS_BEARER_TOKEN=${METRICS_BEARER_TOKEN:-}
     depends_on:
       database:
         condition: service_healthy
@@ -139,6 +140,88 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  monitoring-token-init:
+    image: busybox:1.37.0
+    profiles: [observability]
+    environment:
+      METRICS_BEARER_TOKEN: ${METRICS_BEARER_TOKEN:-}
+    command: >
+      sh -c 'umask 077 && printf "%s" "$$METRICS_BEARER_TOKEN" > /run/monitoring/metrics_bearer_token'
+    volumes:
+      - monitoring-secrets:/run/monitoring
+    restart: "no"
+
+  prometheus:
+    image: prom/prometheus:v3.13.3
+    profiles: [observability]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME:-15d}
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - monitoring-secrets:/run/monitoring:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      monitoring-token-init:
+        condition: service_completed_successfully
+      app:
+        condition: service_started
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.60.6
+    profiles: [observability]
+    privileged: true
+    command: ["--docker_only=true"]
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+
+  loki:
+    image: grafana/loki:3.7.0
+    profiles: [observability]
+    command: -config.file=/etc/loki/loki.yml
+    volumes:
+      - ./observability/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+
+  alloy:
+    image: grafana/alloy:v1.19.2
+    profiles: [observability]
+    command: run /etc/alloy/config.alloy --server.http.listen-addr=0.0.0.0:12345
+    volumes:
+      - ./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      loki:
+        condition: service_started
+
+  grafana:
+    image: grafana/grafana:12.4
+    profiles: [observability]
+    ports:
+      - "127.0.0.1:3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me-local-only}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_started
+      loki:
+        condition: service_started
+
 volumes:
   postgres-data:
   object-storage-data:
+  prometheus-data:
+  loki-data:
+  grafana-data:
+  monitoring-secrets:

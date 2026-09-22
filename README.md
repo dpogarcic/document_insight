@@ -65,6 +65,32 @@ Compose starts PostgreSQL/pgvector, Redis, MinIO and its bucket initialization, 
 migrations, the RQ worker, and the public API. Only the API is exposed on port `8000`;
 the supporting services remain private to the Compose network.
 
+### Local observability
+
+Start the optional local monitoring profile with:
+
+```bash
+docker compose --profile observability up --build
+```
+
+This starts Prometheus, cAdvisor, Loki, Grafana Alloy, and Grafana. Grafana is available
+only on `http://127.0.0.1:3001`; use the configured `admin` account and
+`GRAFANA_ADMIN_PASSWORD`. The pre-provisioned **Document Insight Overview** dashboard
+shows API request rate, p95 duration, 5xx ratio, and container memory. Explore container
+logs through the Loki datasource.
+
+Set strong `METRICS_BEARER_TOKEN` and `GRAFANA_ADMIN_PASSWORD` values before enabling the
+profile. Prometheus uses the first only inside the Compose network to scrape the private
+`/metrics` endpoint; the API returns `404` for that endpoint when no token is configured.
+Prometheus, Loki, cAdvisor, and Alloy do not publish host ports.
+
+For production, deploy the same scrape configuration on private infrastructure with
+encrypted persistent storage, secret-manager supplied monitoring and Grafana credentials,
+an authenticated Grafana ingress, backups, alert routing, and production-appropriate
+retention. Do not expose Prometheus, Loki, cAdvisor, Alloy, or `/metrics` directly to the
+internet. The local single-binary Loki instance is intended for development; use the
+organization's managed log platform or a production Loki deployment for scale and HA.
+
 OpenAPI documentation is available at `http://127.0.0.1:8000/docs`.
 
 Every HTTP request receives a UUID correlation ID. A valid inbound `X-Correlation-ID` is

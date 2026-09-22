@@ -1,0 +1,10 @@
+apiVersion: 1
+
+providers:
+  - name: document-insight
+    orgId: 1
+    folder: Document Insight
+    type: file
+    disableDeletion: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
