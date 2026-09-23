@@ -1,0 +1,18 @@
+# Default owner for everything not matched more specifically below.
+* @dpogarcic
+
+# Architecture, ADRs, and code-quality standards changes should route through
+# whoever owns the design contract, since AGENTS.md treats them as binding.
+/docs/ @dpogarcic
+/AGENTS.md @dpogarcic
+
+# Tenant isolation, authentication, and provider adapters are the areas
+# SECURITY.md calls out for especially careful review.
+/src/document_insight/infrastructure/security/ @dpogarcic
+/src/document_insight/application/auth/ @dpogarcic
+/migrations/ @dpogarcic
+
+# CI/CD and dependency-update configuration.
+/.github/ @dpogarcic
+/Dockerfile @dpogarcic
+/docker-compose.yaml @dpogarcic

@@ -94,15 +94,21 @@ A change is ready to merge when:
 
 An exception to this standard must be narrow, documented in the pull request, and include a follow-up issue or ADR when it affects architecture, security, or operational reliability. Exceptions do not lower the CI coverage threshold or bypass security controls.
 
-## Initial enforcement commands
+## Enforcement commands
 
-The repository will expose these commands as implementation begins:
+The [`Makefile`](../Makefile) exposes these commands:
 
 ```text
-make format-check   # Ruff formatting check
-make lint           # Ruff linting and Mypy strict checks
-make test           # Unit tests with branch coverage
+make local-run       # Start the complete local stack (docker compose up --build)
+make format-check    # Ruff formatting check
+make lint            # Ruff linting and Mypy strict checks
+make test            # Unit tests with branch coverage
 make test-integration
 make test-e2e
-make quality        # All required local quality checks
+make quality         # format-check, lint, test, test-integration, and test-e2e together
 ```
+
+`.github/workflows/ci.yml` runs the same `format-check` and `lint` targets; its `test`
+job runs the equivalent of `test`, `test-integration`, and `test-e2e` together as one
+`pytest` invocation against the disposable Postgres/Redis services it starts, so branch
+coverage is measured across the full suite in one pass.

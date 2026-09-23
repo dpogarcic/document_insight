@@ -259,6 +259,82 @@ response validation, and citation checks remain application-enforced safeguards.
 - Configuration and secrets are external to application code.
 - The public API is stateless; workers can scale independently when a suitable runtime is selected.
 
+### CI/CD scope and delivery boundary
+
+The agreed delivery pipeline ends after publishing the application image to GitHub
+Container Registry (GHCR). The workflow lives at
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) and Dependabot configuration
+at [`.github/dependabot.yml`](../.github/dependabot.yml).
+
+- Pull requests run formatting, linting, and strict type checks (`quality`); unit,
+  service-integration, and the authenticated ingest-to-query end-to-end scenario
+  including denied department access, all with at least 70% branch coverage (`test`);
+  a dependency vulnerability scan of the locked production dependencies (`dependency-audit`);
+  and a Docker build check with an image vulnerability scan (`docker-build`). The `test`
+  job creates a disposable, CI-only `.env` from `.env.example` so the real
+  `database-test`/`redis-test` Compose services back the integration and end-to-end
+  tiers and their required service tests run rather than silently skip because their
+  test configuration is missing.
+- Pushes to `main` repeat the same required checks, then `publish` builds and pushes the
+  application image to GHCR with a commit-SHA tag and records its registry digest in the
+  workflow run summary. Failed checks prevent publication. Pull requests do not receive
+  registry write credentials: `publish` only runs on `push` to `main` and is the only job
+  granted `packages: write`.
+- Dependabot opens weekly dependency (`uv`), base-image (`docker`), and GitHub Actions
+  update pull requests, which pass through the same checks before merging.
+- Docker Compose remains the local startup method for the complete stack. Application
+  processes share the repository's Dockerfile with different commands; infrastructure
+  services use their own images. Compose describes the stack, not a single combined
+  image to publish.
+
+The assignment's deliverables table asks for image publication on every push, while
+its engineering requirements specify build/push on `main`. This project deliberately
+uses pull-request validation and publication from `main`, following the latter wording.
+Image publication is required; a publicly hosted application is not explicitly required.
+
+GHCR stores the built image; it does not run the services. Ending at publication provides
+a versioned delivery artifact without committing this exercise to a hosting environment
+or ongoing infrastructure costs. Local Compose execution demonstrates the running system.
+This is continuous integration and image delivery, with no automated deployment stage.
+
+The next step, if hosting is later requested, is to deploy the published image by digest
+alongside the required private services. That work includes environment-specific secrets,
+TLS, durable encrypted storage and backups, migrations, health checks, and a rollback
+plan. Publishing or deploying an image does not implicitly activate capability profiles;
+the explicit activation rules in ADR 004 still apply.
+
+### Planned: environment-scoped configuration at deploy time
+
+Not implemented; recorded here so the deploy stage has an agreed shape when it is
+requested rather than an ad hoc one. The published image stays environment-agnostic per
+this document's [current commitment](#current-commitment) that configuration and secrets
+are external to application code: `Settings` reads configuration from the process
+environment at container startup, and the Dockerfile bakes in no config or secrets.
+Deployment only needs to decide how each target environment's variables reach that
+startup, not change the image.
+
+- Model each target (`staging`, `production`, ...) as a GitHub **Environment**
+  (Settings → Environments), holding that environment's own secrets and variables
+  (`DATABASE_*_URL`, `MISTRAL_API_KEY`, `JWT_SECRET_KEY`, `S3_*`, `METRICS_BEARER_TOKEN`,
+  and so on). These are distinct from repository-level secrets and from the disposable,
+  randomly generated `.env` the `test` job creates for its own ephemeral Compose
+  containers (see [CI/CD scope](#cicd-scope-and-delivery-boundary) above) — that file
+  never carries real credentials and is unrelated to deployment configuration.
+- Add a `deploy.yml` workflow, triggered after `publish` succeeds (or manually), with one
+  job per target that declares `environment: staging` / `environment: production`.
+  GitHub injects that environment's secrets/variables into the job only, scoped to that
+  run; nothing is written into the image or the repository.
+- Deploy by digest, not by rebuilding: pull the exact
+  `ghcr.io/<owner>/<repo>@sha256:...` the `publish` job already recorded, so what was
+  scanned and tested is bit-for-bit what runs.
+- Use environment protection rules for gating: `production` can require reviewer
+  approval and restrict deployment to `main`, while `staging` can deploy automatically.
+  This is the natural place for the rollback plan and health-check gate this section
+  already calls out.
+- This mirrors the pattern Docker Compose already uses locally (`environment:` entries
+  sourced from a local `.env`); the only change is the source of truth becoming GitHub's
+  per-environment secret store instead of a developer's local file.
+
 ### Deferred production-orchestration decisions
 
 - Kubernetes manifests, autoscaling rules, and managed queue/database selection are not decided yet.

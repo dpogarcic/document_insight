@@ -8,7 +8,11 @@ FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim@sha256:531f855bda2c73cd6ef67d
 
 WORKDIR /app
 
+# Pinning the base image by digest (above) freezes its identity, not its packages'
+# patch level; `apt-get upgrade` pulls current Debian security fixes at build time
+# regardless of how stale that pinned digest gets.
 RUN apt-get update \
+    && apt-get upgrade --yes \
     && apt-get install --yes --no-install-recommends tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 

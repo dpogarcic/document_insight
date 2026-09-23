@@ -26,8 +26,8 @@ def test_suite_form_escapes_template_values() -> None:
     assert "answer quality is scored manually" in page
     assert "Show saved case data" in page
     assert "Upload test documents" in page
-    assert 'data-corpus-choice' in page
-    assert 'data-refresh-corpus' in page
+    assert "data-corpus-choice" in page
+    assert "data-refresh-corpus" in page
     assert '<textarea name="corpus_version_ids_json"' not in page
     assert 'target="_blank" rel="noopener"' in page
 

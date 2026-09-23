@@ -536,9 +536,7 @@ async def e2e_context() -> AsyncIterator[E2EContext]:
         await engine.dispose()
 
 
-async def _drain_ingestion_queue(
-    monkeypatch: pytest.MonkeyPatch, context: E2EContext
-) -> None:
+async def _drain_ingestion_queue(monkeypatch: pytest.MonkeyPatch, context: E2EContext) -> None:
     """Run the real worker entry point with only the model-provider edge faked."""
     worker_settings = Settings(
         jwt_secret_key=_JWT_SECRET,
@@ -690,4 +688,6 @@ async def test_authenticated_ingest_to_query_end_to_end(
     denied_result = denied.json()
     assert denied_result["confidence"] == 0.0
     assert denied_result["sources"] == []
-    assert denied_result["answer"] == "The information is not available in your authorized documents."
+    assert (
+        denied_result["answer"] == "The information is not available in your authorized documents."
+    )

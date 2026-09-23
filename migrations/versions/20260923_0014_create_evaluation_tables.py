@@ -197,9 +197,7 @@ def upgrade() -> None:
         "evaluation_runs, evaluation_case_results, evaluation_aggregates, "
         "evaluation_gate_reviews TO di_profile_operator"
     )
-    op.execute(
-        "GRANT UPDATE (is_active) ON evaluation_suite_revisions TO di_profile_operator"
-    )
+    op.execute("GRANT UPDATE (is_active) ON evaluation_suite_revisions TO di_profile_operator")
     op.execute(
         "GRANT UPDATE (status, started_at, completed_at, error_message, enqueued_at, "
         "heartbeat_at, comparison_valid) ON evaluation_runs TO di_profile_operator"

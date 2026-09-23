@@ -84,9 +84,23 @@ database login and does not have document-content access. The local port is boun
 loopback; production requires an internal TLS-protected ingress.
 
 The `profile-operator` CLI offers the same approval workflow for scripts or emergency
-operations. `docker compose up` also starts it, but with its default `--help` command, so
+operations. It uses `DATABASE_PROFILE_OPERATOR_URL`, separate from the public API and
+worker credentials, and reads local JSON configuration files from a `profiles/`
+directory. `docker compose up` also starts it, but with its default `--help` command, so
 it exits immediately; run a specific command on demand with
-`docker compose run --rm profile-operator <command>`.
+`docker compose run --rm profile-operator <command>`:
+
+1. `create-capability --capability embedding --name mistral-embed-v2 --config-file /app/profiles/embedding-v2.json` stages a draft and prints its ID.
+2. `validate-capability PROFILE_ID` approves the draft after schema, adapter, and runtime checks.
+3. `create-ingestion --ner ID --chunking ID --lexical ID --embedding ID` stages a bundle, reusing approved IDs for unchanged capabilities.
+4. `create-query --lexical OLD_ID NEW_ID --embedding OLD_ID NEW_ID --reranker ID --generation ID --retrieval-file /app/profiles/retrieval.json` stages a query bundle that reads both old and new indexes.
+5. Review the proposed policy with `show-capability PROFILE_ID`, `show-query PROFILE_ID`, and `show-ingestion PROFILE_ID`. `show-active` prints the active IDs and revisions. Activate the query bundle with `activate --kind query --profile-id ID --expected-revision N --actor-id OPERATOR_UUID --reason "enable both cohorts"`. Then activate the ingestion bundle with its own expected revision.
+
+Keep runtime credentials for every provider used by an active query cohort. This
+deployment supports Mistral embedding, reranking, and generation; another provider
+requires its adapter and credential before validation. Existing jobs retain their
+persisted ingestion profile. Query activation refuses to omit cohorts referenced by
+ready index generations, so older indexed documents remain searchable.
 
 ### Evaluation suites and manual quality gate
 
@@ -152,10 +166,62 @@ pending after queue failure.
 
 Starts automatically with `docker compose up --build`; open
 `http://127.0.0.1:3001/`. Sign in as `admin` using `GRAFANA_ADMIN_PASSWORD` from
-`.env`. Provisioned dashboards cover system resources and API traffic, RAG query
-outcomes, ingestion-job health, logs, and alert status. Prometheus, Loki, cAdvisor, and
-Alloy are supporting services without published host ports. See
-[ADR 005](../adr/005-observability.md) for the signals and production requirements.
+`.env`. Prometheus, Loki, cAdvisor, and Alloy are supporting services without published
+host ports. See [ADR 005](../adr/005-observability.md) for the signals and production
+requirements.
+
+Provisioned dashboards: **Document Insight System** for API traffic and container CPU,
+memory, and task-state signals; **Document Insight RAG** for query latency and evidence
+outcomes (it does not display Recall@K or Precision@K — those require labelled offline
+evaluation data, see [evaluation suites](#evaluation-suites-and-manual-quality-gate)
+above); **Document Insight Ingestion** for durable jobs by status, the age of the oldest
+queued or in-flight job, jobs awaiting retry, terminal failures, worker/reconciler
+liveness, and per-stage processing outcomes and latency, sourced from PostgreSQL's
+authoritative ledger rather than transient Redis queue state; **Document Insight Logs**,
+which starts at a 24-hour window and filters Docker logs by service; and
+**Document Insight Alerts** for current Grafana-managed alert states — inspect every
+rule, including healthy ones, under **Alerting → Alert rules**.
+
+On Docker Desktop, cAdvisor may expose only an aggregate host cgroup rather than
+individual container cgroups; the memory panel then shows the available aggregate
+instead of per-service memory.
+
+Set strong `METRICS_BEARER_TOKEN` and `GRAFANA_ADMIN_PASSWORD` values before starting the
+stack. Grafana provisions and evaluates alert rules against Prometheus; no external
+Alertmanager, contact point, or custom notification policy is configured, so notification
+delivery must be configured and tested in Grafana before production use. Prometheus uses
+that token only inside the Compose network to scrape the private `/metrics` endpoint; the
+API returns `404` for that endpoint when no token is configured. Prometheus, Loki,
+cAdvisor, and Alloy do not publish host ports.
+
+Worker, reconciler, and API metrics use Prometheus multiprocess files on a private shared
+volume, reset once before the services start. This makes worker-stage durations, provider
+outcomes, recovered/exhausted-job totals, worker heartbeat, and worker/reconciler
+last-success timestamps available through the authenticated API scrape without exposing a
+worker port. The worker heartbeat advances during idle polling and while RQ monitors an
+active job; last completed-job time is intentionally separate. Grafana alerts when the
+worker heartbeat or reconciler success becomes stale, or a processing job remains in
+flight too long. The shared multiprocess volume is a local Compose arrangement:
+independently recreating containers can reuse process IDs and corrupt the metric files,
+making `/metrics` fail. After such a restart, stop the API, worker, and reconciler
+together, run `docker compose run --rm prometheus-multiproc-init`, then start them
+together. Before production deployment, replace this shared-file collection with a
+restart-safe per-instance metric collection design and test rolling restarts.
+
+For production, deploy the same scrape configuration on private infrastructure with
+encrypted persistent storage, secret-manager supplied monitoring and Grafana credentials,
+an authenticated Grafana ingress, backups, Grafana contact points and notification
+policies, and production-appropriate retention. Do not expose Prometheus, Loki, cAdvisor,
+Alloy, or `/metrics` directly to the internet. The local single-binary Loki instance is
+intended for development; use the organization's managed log platform or a production
+Loki deployment for scale and HA.
+
+Every HTTP request receives a UUID correlation ID (a valid inbound `X-Correlation-ID` is
+preserved; otherwise the API generates one), returned in the `X-Correlation-ID` response
+header and included as a `correlation_id` field on every server log line — request-scoped
+logs and exception tracebacks use the response ID, while work outside an HTTP request uses
+`-`. See [ARCHITECTURE.md's request tracing](../ARCHITECTURE.md#request-tracing) for the
+full propagation contract.
 
 ## Background and storage services
 

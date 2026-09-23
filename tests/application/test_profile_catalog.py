@@ -8,7 +8,9 @@ from document_insight.infrastructure.query_profile.protocol import ResolvedQuery
 
 
 def _query(reranker_id, generation_id) -> ResolvedQueryProfile:  # type: ignore[no-untyped-def]
-    return ResolvedQueryProfile(uuid4(), (uuid4(),), (uuid4(),), reranker_id, generation_id, uuid4())
+    return ResolvedQueryProfile(
+        uuid4(), (uuid4(),), (uuid4(),), reranker_id, generation_id, uuid4()
+    )
 
 
 def test_selectable_queries_excludes_a_profile_with_a_retired_reranker() -> None:

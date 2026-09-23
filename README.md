@@ -1,11 +1,14 @@
 # Document Insight Platform
 
+[![CI](https://github.com/dpogarcic/document_insight/actions/workflows/ci.yml/badge.svg)](https://github.com/dpogarcic/document_insight/actions/workflows/ci.yml)
+
 An internal AI platform for securely ingesting PDFs and images, extracting structured
 content, and answering questions over authorized document evidence.
 
 ## Project status
 
-**Core vertical slice implemented and tested; CI/CD pipeline is not yet added.**
+**Core vertical slice implemented and tested, with a CI/CD pipeline through image
+publication.**
 
 Authentication, ingestion, processing, and query are implemented end to end. Local
 registration and login are connected to PostgreSQL with Argon2 password hashing and
@@ -33,8 +36,14 @@ summarizes the latest run, remaining bottlenecks, and capacity expectations. Rep
 HTTP outcomes, client failures, latency, and scheduler lag; HTTP success alone is not an
 answer-quality evaluation.
 
-Not yet done: the CI/CD pipeline (lint/test/security-scan on push, image build/push on
-main) is a required deliverable per `Tech_Assignment.pdf` and is still outstanding.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs quality, test, dependency-audit,
+and Docker build/image-scan checks on pull requests, repeats the required checks on
+`main`, and publishes the application image to GitHub Container Registry (GHCR) only
+from `main`, tagged with the commit SHA. Publication is the final stage; cloud deployment
+is intentionally deferred. [`.github/dependabot.yml`](.github/dependabot.yml) opens weekly
+dependency, base-image, and GitHub Actions update pull requests through the same checks.
+See the [CI/CD scope](docs/ARCHITECTURE.md#cicd-scope-and-delivery-boundary) for the
+assignment interpretation and rationale.
 
 ## Planned capabilities
 
@@ -102,8 +111,10 @@ services receive restricted login URLs. Then start the complete local stack, inc
 the Admin Panel, evaluation services, and local observability, with one command:
 
 ```bash
-docker compose up --build
+make local-run
 ```
+
+Equivalent to, and a thin wrapper around, `docker compose up --build`.
 
 Compose starts PostgreSQL/pgvector, Redis, MinIO and its bucket initialization, database
 migrations, restricted database role provisioning, the RQ worker, the public API, the
@@ -111,110 +122,12 @@ Admin Panel, evaluation workers, and the local observability stack (Prometheus, 
 Loki, Grafana Alloy, and Grafana). Nothing is gated behind a Compose `--profile` flag.
 Only the API, Admin Panel, and Grafana are exposed on host ports (`8000`, `127.0.0.1:8001`,
 and `127.0.0.1:3001`); the supporting services remain private to the Compose network.
-
-### Manual configuration-profile approval
-
-For the browser UI, set `DATABASE_PROFILE_OPERATOR_PASSWORD` and its matching
-`DATABASE_PROFILE_OPERATOR_URL`, plus distinct `ADMIN_PANEL_USERNAME` and
-`ADMIN_PANEL_PASSWORD` values in `.env`. It starts with the rest of the stack:
-
-```bash
-docker compose up --build
-```
-
-Open [Document Insight Admin](http://127.0.0.1:8001/) and sign in with those admin
-panel credentials. The Compose port binds to localhost only. The panel supports reviewing
-profiles, creating draft capabilities, validating them, assembling ingestion and query
-policies, and activating bundles with an audit reason. It keeps older read cohorts
-selected when creating a new query policy. For production, put the panel behind an
-internal TLS ingress and set `ADMIN_PANEL_SECURE_COOKIES=true`.
-
-The operator command remains available for scripted or emergency use:
-
-The private `profile-operator` service uses `DATABASE_PROFILE_OPERATOR_URL`, separate
-from the public API and worker credentials. Put local JSON configuration files in a
-`profiles/` directory. `docker compose up` also starts this service, but only runs its
-default `--help` command and exits; run a specific command with
-`docker compose run --rm profile-operator ...`.
-
-1. `create-capability --capability embedding --name mistral-embed-v2 --config-file /app/profiles/embedding-v2.json` stages a draft and prints its ID.
-2. `validate-capability PROFILE_ID` approves the draft after schema, adapter, and runtime checks.
-3. `create-ingestion --ner ID --chunking ID --lexical ID --embedding ID` stages a bundle, reusing approved IDs for unchanged capabilities.
-4. `create-query --lexical OLD_ID NEW_ID --embedding OLD_ID NEW_ID --reranker ID --generation ID --retrieval-file /app/profiles/retrieval.json` stages a query bundle that reads both old and new indexes.
-5. Review the proposed policy with `show-capability PROFILE_ID`, `show-query PROFILE_ID`, and `show-ingestion PROFILE_ID`. `show-active` prints the active IDs and revisions. Activate the query bundle with `activate --kind query --profile-id ID --expected-revision N --actor-id OPERATOR_UUID --reason "enable both cohorts"`. Then activate the ingestion bundle with its own expected revision.
-
-Keep runtime credentials for every provider used by an active query cohort. This
-deployment supports Mistral embedding, reranking, and generation; another provider
-requires its adapter and credential before validation. Existing jobs retain their
-persisted ingestion profile. Query activation refuses to omit cohorts referenced by
-ready index generations, so older indexed documents remain searchable.
-
-### Local observability
-
-The local monitoring stack starts with the rest of the services:
-
-```bash
-docker compose up --build
-```
-
-This starts Prometheus, cAdvisor, Loki, Grafana Alloy, and Grafana. Grafana is available
-only on `http://127.0.0.1:3001`; use the configured `admin` account and
-`GRAFANA_ADMIN_PASSWORD`. Grafana provisions dashboards for **Document Insight System**
-for API traffic and container CPU, memory, and task-state signals; **Document Insight RAG**
-for query latency and evidence outcomes; and **Document Insight Ingestion** for asynchronous
-job health. The RAG dashboard does not display Recall@K or Precision@K: those require
-labelled offline evaluation data. **Document Insight Logs** starts at a 24-hour window and
-filters Docker logs by service. **Document Insight Alerts** shows current Grafana-managed
-alert states and configured coverage. Inspect every rule, including healthy rules, under
-**Alerting → Alert rules**.
-
-The separate **Document Insight Ingestion** dashboard shows durable jobs by status, the
-age of the oldest queued or in-flight job, jobs awaiting retry, terminal failures,
-worker/reconciler liveness, and per-stage processing outcomes and latency. Job counts and
-ages come from PostgreSQL's authoritative ledger rather than transient Redis queue state.
-
-On Docker Desktop, cAdvisor may expose only an aggregate host cgroup rather than individual
-container cgroups. In that case the memory panel displays the available aggregate instead of
-per-service memory.
-
-Set strong `METRICS_BEARER_TOKEN` and `GRAFANA_ADMIN_PASSWORD` values before starting the
-stack. Grafana provisions and evaluates the alert rules against Prometheus. No external
-Alertmanager, contact point, or custom notification policy is configured by this project;
-notification delivery must be configured and tested in Grafana before production use.
-Prometheus uses the first only inside the Compose network to scrape the private
-`/metrics` endpoint; the API returns `404` for that endpoint when no token is configured.
-Prometheus, Loki, cAdvisor, and Alloy do not publish host ports.
-
-Worker, reconciler, and API metrics use Prometheus multiprocess files on a private shared
-volume, reset once before the services start. This makes worker-stage durations, provider
-outcomes, recovered/exhausted-job totals, worker heartbeat, and worker/reconciler
-last-success timestamps
-available through the authenticated API scrape without exposing a worker port.
-The worker heartbeat advances during idle polling and while RQ monitors an active job;
-last completed-job time is intentionally separate. Grafana alerts when the worker heartbeat
-or reconciler success becomes stale, or a processing job remains in flight too long.
-The shared multiprocess volume is a local Compose arrangement: independently recreating
-containers can reuse process IDs and corrupt the metric files, making `/metrics` fail.
-After such a restart, stop the API, worker, and reconciler together, run
-`docker compose run --rm prometheus-multiproc-init`, then start them together.
-Before production deployment, replace this shared-file collection with a restart-safe
-per-instance metric collection design and test rolling restarts.
-
-For production, deploy the same scrape configuration on private infrastructure with
-encrypted persistent storage, secret-manager supplied monitoring and Grafana credentials,
-an authenticated Grafana ingress, backups, Grafana contact points and notification policies,
-and production-appropriate
-retention. Do not expose Prometheus, Loki, cAdvisor, Alloy, or `/metrics` directly to the
-internet. The local single-binary Loki instance is intended for development; use the
-organization's managed log platform or a production Loki deployment for scale and HA.
-
 OpenAPI documentation is available at `http://127.0.0.1:8000/docs`.
 
-Every HTTP request receives a UUID correlation ID. A valid inbound `X-Correlation-ID` is
-preserved; otherwise the API generates one. The selected ID is returned in the
-`X-Correlation-ID` response header so clients can include it in support reports. Every
-server log line includes a `correlation_id` field; request-scoped logs and exception
-tracebacks use the response ID, while work outside an HTTP request uses `-`.
+See [Applications and services](docs/application/README.md) for what each container does,
+including the Admin Panel and `profile-operator` CLI walkthrough for approving capability
+profiles, and the Grafana dashboards, metrics internals, and production observability
+requirements for the local monitoring stack.
 
 | Method | Path | Contract | Status |
 | --- | --- | --- | --- |
@@ -226,112 +139,89 @@ tracebacks use the response ID, while work outside an HTTP request uses `-`.
 | `GET` | `/jobs/{job_id}` | Read an authorized processing-job status | Implemented |
 | `POST` | `/query` | Authenticate, enforce a per-user quota, retrieve authorized evidence, and return a cited answer | Implemented |
 
+### Sample API calls
+
+Register creates a new tenant, a `General` department, and a tenant administrator:
+
+```bash
+curl -X POST http://127.0.0.1:8000/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "email": "admin@example.com",
+        "password": "a-strong-password",
+        "display_name": "Ada Admin",
+        "tenant_name": "Example Tenant"
+      }'
+```
+
+Log in to obtain a short-lived bearer token:
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:8000/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "admin@example.com", "password": "a-strong-password"}' \
+  | python3 -c 'import sys, json; print(json.load(sys.stdin)["access_token"])')
+```
+
+Ingest a PDF or image (multipart upload, ≤ 25 MiB); omit `document_id` to create a new
+document at `v1`, or pass an existing one to create its next version:
+
+```bash
+curl -X POST http://127.0.0.1:8000/ingest \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@sample.pdf;type=application/pdf"
+```
+
+Check processing status with the `job_id` the `/ingest` response returned:
+
+```bash
+curl http://127.0.0.1:8000/jobs/<job_id> -H "Authorization: Bearer $TOKEN"
+```
+
+Once a version is `ready`, a tenant admin activates it as the document's current,
+searchable version:
+
+```bash
+curl -X POST http://127.0.0.1:8000/documents/<document_id>/activate \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Ask a question with an optional lexical/vector `filter` hint and result count:
+
+```bash
+curl -X POST http://127.0.0.1:8000/query \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"question": "How many paid vacation days do employees get?", "top_k": 5}'
+```
+
+Returns `answer`, an evidence-`confidence` score, quoted `sources` (document version,
+page, and exact passage), and `entities` detected in the authorized documents that
+contributed to retrieval.
+
 `POST /query` allows 30 requests per authenticated user per 60-second window by default.
 Set `QUERY_RATE_LIMIT_REQUESTS` and `QUERY_RATE_LIMIT_WINDOW_SECONDS` to change the quota.
 Redis shares the count across API instances. Once exhausted, the API returns `429` with
 `detail.code: "query_rate_limit_exceeded"` and a `Retry-After` header. If Redis cannot be
 checked, `/query` returns `503` and does not call retrieval or a model provider.
 
-Registration intentionally creates a new tenant. Joining an existing tenant will use a
-future administrator-controlled invitation flow; public registration cannot select an
-existing tenant or self-assign a role.
+Registration intentionally creates a new tenant; joining an existing tenant will use a
+future administrator-controlled invitation flow. See
+[ARCHITECTURE.md's ingest/version-replacement](docs/ARCHITECTURE.md#ingest-and-version-replacement)
+and [processing-job recovery](docs/ARCHITECTURE.md#processing-job-recovery) sections for
+what happens between `202 Accepted` and a version becoming `ready` — parsing, language
+detection, NER, chunking, embedding, and reconciler recovery — and
+[Applications and services](docs/application/README.md#background-and-storage-services)
+for following worker/reconciler logs locally.
 
-`POST /ingest` returns `202` with `status: "stored"`, `job_status: "queued"`, and the
-generated `job_id` only after the original and durable records are stored and RQ accepts
-the job. PostgreSQL remains authoritative for lifecycle state; `enqueued_at` records
-successful queue publication. The worker parses PDFs and images into a durable,
-version-scoped extraction checkpoint, detects English or Croatian, and persists spaCy
-entity metadata. It then creates deterministic page-aware chunks, including page and
-character offsets for exact citations, and PostgreSQL generates a `simple` full-text index
-for each chunk. This is a temporary lexical index, not BM25. The worker batches those
-chunks through Mistral's embeddings API, validates the profile-declared vector dimension,
-and stores vectors under the exact embedding profile.
-After all checkpoints succeed it marks the index generation, job, and version `ready`.
-It does not make the version searchable; a future tenant-admin activation action will
-atomically select a ready version as the document's current version.
-
-The worker image includes and uses local spaCy NER models for English (`en_core_web_sm`)
-and Croatian (`hr_core_news_sm`). The entity model holds deduplicated,
-document-version-scoped metadata: a display value, normalized value, label, occurrence
-count, and model provenance. Only RAG-relevant labels are retained: `PERSON`, `ORG`,
-`GPE`, `LOC`, `PRODUCT`, `EVENT`, and `DATE`. The Croatian model's `PER` label is
-normalized to the canonical `PERSON` label; broad or numeric labels such as `MISC` and
-`CARDINAL` are discarded. Chunks, rather than entities, retain the grounding used for
-passage retrieval and citations.
-
-The Compose `worker` service consumes the `ingestion` RQ queue and starts RQ's delayed-job
-scheduler. The `reconciler` service runs every `JOB_RECONCILIATION_INTERVAL_SECONDS`
-(60 seconds by default). PostgreSQL remains authoritative: it republishes unqueued or stale
-queued work, resumes stale processing jobs within their retry budget, and retries only
-transient failed jobs. Permanent parser failures and exhausted jobs remain terminal.
-Follow either worker's output with:
-
-```bash
-docker compose logs -f worker reconciler
-```
-
-Run the current checks with:
-
-```bash
-uv run ruff format --check src tests migrations
-uv run ruff check src tests migrations
-uv run mypy
-uv run pytest
-```
-
-### Disposable PostgreSQL security tests
-
-Set `TEST_DATABASE_OWNER_PASSWORD` and `TEST_DATABASE_RUNTIME_PASSWORD` in `.env`,
-and set `TEST_DATABASE_RUNTIME_URL` to
-`postgresql+asyncpg://document_insight_test_runtime:<runtime-password>@127.0.0.1:5433/document_insight_test`.
-Use URL-safe local test passwords, and keep the URL password identical to
-`TEST_DATABASE_RUNTIME_PASSWORD`. The test database runs on port 5433 with its data
-on a temporary filesystem; stopping its container removes the data. It never uses
-the development database on port 5432.
-
-`database-test`, `test-migrate`, `test-bootstrap-roles`, and `redis-test` start
-automatically with `docker compose up --build` alongside the rest of the stack, so once
-it's running you only need:
-
-```bash
-uv run pytest -q -o addopts='' tests/integration
-docker compose rm -sf database-test redis-test
-```
-
-The last command discards the temporary test data; it is optional since the tmpfs is
-also cleared on container removal.
-
-The test database initializes a restricted runtime role automatically. Alembic uses
-the separate test owner role. The role bootstrap step enables six runtime logins and,
-when configured, the private profile-operator login using passwords from `.env`.
-The RLS tests check role capabilities, direct
-SQL reads and writes, department revocation, editor assignment timing, ranked retrieval,
-and an authenticated `/query` response. The disposable Redis test checks that concurrent
-requests share one per-user quota. These checks skip when their respective test URLs are
-unset.
-
-## First implementation scope
-
-The initial release will provide a Python/FastAPI API, PostgreSQL with pgvector,
-S3-compatible object storage, Redis/RQ background processing, and Docker Compose for
-local development. The API will expose document ingestion, job status, authentication,
-and document query operations.
-
-The implementation is container-first. Kubernetes deployment and autoscaling are
-deliberately deferred until throughput, operational requirements, and hosting standards
-have been validated.
+Run the local checks and disposable-test-service setup described in
+[CONTRIBUTING.md](CONTRIBUTING.md#local-workflow) before opening a pull request.
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) for the human and AI-agent workflows. It links
-to the required architecture, ADRs, and [code-quality standards](docs/CODE_QUALITY.md).
-
-Install the repository hooks before contributing implementation changes:
-
-```bash
-uv sync --group dev
-uv run pre-commit install
-```
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for the human and AI-agent workflows, including
+installing the repository's pre-commit hooks. It links to the required architecture,
+ADRs, and [code-quality standards](docs/CODE_QUALITY.md).
 
 Report security vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 Design decisions remain **In Review** until they are validated during the first working

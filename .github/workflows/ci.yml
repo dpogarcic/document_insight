@@ -1,0 +1,191 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Formatting, linting, and strict type checks (docs/CODE_QUALITY.md).
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - run: uv sync --group dev
+
+      - name: Ruff format check
+        run: make format-check
+
+      - name: Ruff lint and mypy
+        run: make lint
+
+  # Unit, integration, and end-to-end tests against the real disposable PostgreSQL
+  # and Redis services docker-compose.yaml already defines for this purpose, with
+  # branch coverage enforced by pyproject.toml's pytest addopts.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - run: uv sync --group dev
+
+      - name: Create disposable CI environment file
+        # docker-compose.yaml interpolates every ${VAR:?...} in the file when parsed,
+        # even for services we don't start, so every placeholder needs a value, not
+        # only the ones the test/redis services use directly. Each distinct
+        # replace-with-* placeholder in .env.example gets one random value, applied
+        # everywhere it appears (standalone passwords and the matching DATABASE_*_URL
+        # occurrences stay consistent automatically). Nothing here is used outside
+        # this disposable job.
+        run: |
+          cp .env.example .env
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import secrets
+
+          path = pathlib.Path(".env")
+          text = path.read_text()
+          for token in sorted(set(re.findall(r"replace-with-[a-z0-9-]*", text))):
+              text = text.replace(token, secrets.token_hex(16))
+          path.write_text(text)
+          PY
+
+      - name: Start disposable database and Redis
+        run: docker compose up -d --wait database-test redis-test
+
+      - name: Migrate disposable database
+        run: docker compose run --rm test-migrate
+
+      - name: Bootstrap disposable database roles
+        run: docker compose run --rm test-bootstrap-roles
+
+      - name: Run tests with branch coverage
+        # Settings classes load the disposable .env file created above (TEST_DATABASE_RUNTIME_URL,
+        # TEST_DATABASE_OWNER_PASSWORD, TEST_REDIS_URL, JWT_SECRET_KEY, and the six restricted
+        # DATABASE_*_PASSWORD values), so integration and end-to-end tests run instead of skipping.
+        run: uv run pytest
+
+      - name: Tear down disposable services
+        if: always()
+        run: docker compose down -v
+
+  # Dependency vulnerability scanning for the locked production dependencies that
+  # ship in the published image (docs/CODE_QUALITY.md: "Dependencies are pinned
+  # through the project lockfile and checked for known vulnerabilities in CI").
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - run: uv export --no-dev --no-hashes -o requirements.txt
+
+      - run: uvx pip-audit -r requirements.txt
+
+  # Docker build check plus an image vulnerability scan. Runs on every PR and on
+  # main so a bad image can never reach the publish step.
+  docker-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: document-insight:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan image for known vulnerabilities
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: document-insight:ci
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Upload vulnerability report
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+  # Publishes the application image to GHCR after every required check passes,
+  # only from main (docs/ARCHITECTURE.md#cicd-scope-and-delivery-boundary). Pull
+  # requests never run this job, so they never receive registry write credentials.
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [quality, test, dependency-audit, docker-build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image name
+        # GHCR requires a lowercase path; github.repository preserves the owner/repo's
+        # actual casing.
+        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: type=sha,format=long
+
+      - uses: docker/build-push-action@v6
+        id: push
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Record published image digest
+        run: |
+          echo "### Published image" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`${{ env.IMAGE_NAME }}@${{ steps.push.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"

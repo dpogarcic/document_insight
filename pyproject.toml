@@ -19,7 +19,7 @@ dependencies = [
     "redis>=6,<7",
     "rq>=2,<3",
     "pypdf>=5,<7",
-    "pillow>=11,<12",
+    "pillow>=12,<13",
     "pymupdf>=1.26,<2",
     "pytesseract>=0.3.13,<1",
     "spacy>=3.8,<4",
@@ -61,6 +61,10 @@ packages = ["document_insight"]
 [tool.pytest.ini_options]
 addopts = "--cov=src --cov-branch --cov-report=term-missing --cov-fail-under=70"
 testpaths = ["tests"]
+# tests/benchmark/test_load_test.py imports the repo-root `benchmark` package; `pytest`
+# invoked directly (not via `python -m pytest`) does not add the working directory to
+# sys.path on its own.
+pythonpath = ["."]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/document_insight"]

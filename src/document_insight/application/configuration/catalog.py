@@ -48,8 +48,7 @@ class ProfileCatalog:
         return tuple(
             item
             for item in self.queries
-            if item.reranker_profile_id not in retired
-            and item.generation_profile_id not in retired
+            if item.reranker_profile_id not in retired and item.generation_profile_id not in retired
         )
 
 
