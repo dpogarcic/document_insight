@@ -1,0 +1,12 @@
+{
+  "recorded_at": "2026-09-23T19:06:06.880911+00:00",
+  "load_started_at": "2026-09-23T19:05:39.596272+00:00",
+  "label": "Auth/embedding session release; PgBouncer 10 per role, 80 total; interactive embeddings no 429 retries; four workers",
+  "git_revision": "adf0c0d4a1c2adea85becd05195b2f8cda4d3184",
+  "working_tree_dirty": true,
+  "timeout_s": 30.0,
+  "quota_requests": 30,
+  "quota_window_s": 60.0,
+  "sample_sha256": "3db5fdd85e1a31d9f5308668bf2b85b6ca5c4ad9f3e7b6e3807a4e7a4175cdfe",
+  "question_sha256": "7f4a56d6ae05253bc672b3c7c8498f40a93654c8907ddbe14da7f891ee6d0a7a"
+}

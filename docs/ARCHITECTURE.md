@@ -98,6 +98,18 @@ Tenant 1 --- * User
 User * --- * Department (through user_departments)
 ```
 
+The Compose runtime connects restricted database roles through PgBouncer 1.24 in
+transaction mode. Pools retain distinct database identities and transaction-local RLS.
+Each role pool is limited to 10 backend connections, with an 80-connection database cap
+and a five-second queue wait. PostgreSQL retains headroom for migrations and operations.
+The pinned version enables protocol prepared-statement tracking by default. Authentication releases its
+read transaction after constructing the authorization context. API query reads release
+transactions before embedding, reranking, and generation calls; subsequent SQL rebinds
+the verified actor through the transaction-start hook. Interactive API query embeddings
+make one provider attempt and surface provider throttling as `503 query_provider_unavailable`;
+background ingestion retains bounded embedding retries. This avoids holding interactive
+requests through a 35-second embedding retry schedule when the provider is saturated.
+
 The database enforces that every user-department membership belongs to one tenant.
 The API refreshes role and department membership from PostgreSQL for each authenticated
 request. Restricted database logins separate read-only query traffic, ingest and activation

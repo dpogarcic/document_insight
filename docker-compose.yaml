@@ -19,6 +19,9 @@ services:
       - S3_BUCKET_NAME=${S3_BUCKET_NAME:?Set S3_BUCKET_NAME in .env}
       - S3_REGION=${S3_REGION:?Set S3_REGION in .env}
       - REDIS_URL=${REDIS_URL:?Set REDIS_URL in .env}
+      - DATABASE_POOL_SIZE=${DATABASE_POOL_SIZE:-10}
+      - DATABASE_MAX_OVERFLOW=${DATABASE_MAX_OVERFLOW:-20}
+      - DATABASE_POOL_TIMEOUT_SECONDS=${DATABASE_POOL_TIMEOUT_SECONDS:-5}
       - QUERY_RATE_LIMIT_REQUESTS=${QUERY_RATE_LIMIT_REQUESTS:-30}
       - QUERY_RATE_LIMIT_WINDOW_SECONDS=${QUERY_RATE_LIMIT_WINDOW_SECONDS:-60}
       - RQ_INGESTION_QUEUE_NAME=ingestion
@@ -28,6 +31,8 @@ services:
     depends_on:
       database:
         condition: service_healthy
+      pgbouncer:
+        condition: service_started
       redis:
         condition: service_healthy
       object-storage-init:
@@ -42,7 +47,7 @@ services:
       - ./src:/app/src
       - prometheus-multiproc:/run/prometheus-multiproc
     command: >
-      uv run --no-sync uvicorn --host 0.0.0.0 --port 8000 "src.document_insight.api.app:app"
+      uv run --no-sync uvicorn --host 0.0.0.0 --port 8000 --workers 4 "src.document_insight.api.app:app"
 
   # Database service
   database:
@@ -109,6 +114,57 @@ services:
       database-test:
         condition: service_healthy
     restart: "no"
+
+  # Writes PgBouncer's userlist from the same restricted-role passwords used
+  # to build DATABASE_*_URL in .env.
+  pgbouncer-userlist-init:
+    image: busybox:1.37.0
+    environment:
+      DATABASE_READ_PASSWORD: ${DATABASE_READ_PASSWORD:?Set DATABASE_READ_PASSWORD in .env}
+      DATABASE_WRITE_PASSWORD: ${DATABASE_WRITE_PASSWORD:?Set DATABASE_WRITE_PASSWORD in .env}
+      DATABASE_AUTH_PASSWORD: ${DATABASE_AUTH_PASSWORD:?Set DATABASE_AUTH_PASSWORD in .env}
+      DATABASE_WORKER_PASSWORD: ${DATABASE_WORKER_PASSWORD:?Set DATABASE_WORKER_PASSWORD in .env}
+      DATABASE_RECONCILER_PASSWORD: ${DATABASE_RECONCILER_PASSWORD:?Set DATABASE_RECONCILER_PASSWORD in .env}
+      DATABASE_MONITOR_PASSWORD: ${DATABASE_MONITOR_PASSWORD:?Set DATABASE_MONITOR_PASSWORD in .env}
+      DATABASE_PROFILE_OPERATOR_PASSWORD: ${DATABASE_PROFILE_OPERATOR_PASSWORD:-}
+    command: ["/bin/sh", "/scripts/generate-userlist.sh"]
+    volumes:
+      - ./pgbouncer/generate-userlist.sh:/scripts/generate-userlist.sh:ro
+      - pgbouncer-secrets:/run/pgbouncer
+    restart: "no"
+
+  # Transaction-pooling proxy in front of PostgreSQL. Every restricted database
+  # role (DATABASE_*_URL) connects through this instead of `database` directly,
+  # so many short-lived application-side pool checkouts share far fewer real
+  # PostgreSQL backend connections. It has no fixed database user/password of
+  # its own: it authenticates each client against the generated userlist, then
+  # opens the backend connection as that same role, preserving PostgreSQL's
+  # per-role grants and RLS policies unchanged. `DATABASE_URL` (the migration
+  # and bootstrap owner credential) intentionally bypasses this and keeps
+  # connecting to `database` directly.
+  pgbouncer:
+    image: pgbouncer/pgbouncer:1.24.1
+    environment:
+      DATABASES_HOST: database
+      DATABASES_PORT: "5432"
+      DATABASES_DBNAME: document_insight
+      PGBOUNCER_AUTH_TYPE: plain
+      PGBOUNCER_AUTH_FILE: /run/pgbouncer/userlist.txt
+      PGBOUNCER_POOL_MODE: transaction
+      PGBOUNCER_MAX_CLIENT_CONN: "1000"
+      # Pools are per database/user pair, not a global connection budget.
+      PGBOUNCER_DEFAULT_POOL_SIZE: "10"
+      PGBOUNCER_MAX_DB_CONNECTIONS: "80"
+      PGBOUNCER_QUERY_WAIT_TIMEOUT: "5"
+      PGBOUNCER_LISTEN_PORT: "6432"
+      PGBOUNCER_IGNORE_STARTUP_PARAMETERS: extra_float_digits,search_path
+    volumes:
+      - pgbouncer-secrets:/run/pgbouncer:ro
+    depends_on:
+      database:
+        condition: service_healthy
+      pgbouncer-userlist-init:
+        condition: service_completed_successfully
 
   # Redis service
   redis:
@@ -202,6 +258,8 @@ services:
     depends_on:
       bootstrap-roles:
         condition: service_completed_successfully
+      pgbouncer:
+        condition: service_started
     volumes:
       - ./src:/app/src:ro
       - ./profiles:/app/profiles:ro
@@ -218,6 +276,8 @@ services:
     depends_on:
       bootstrap-roles:
         condition: service_completed_successfully
+      pgbouncer:
+        condition: service_started
     volumes:
       - ./src:/app/src:ro
     stdin_open: true
@@ -242,6 +302,8 @@ services:
     depends_on:
       bootstrap-roles:
         condition: service_completed_successfully
+      pgbouncer:
+        condition: service_started
     volumes:
       - ./src:/app/src:ro
     command: >
@@ -277,6 +339,8 @@ services:
     depends_on:
       database:
         condition: service_healthy
+      pgbouncer:
+        condition: service_started
       redis:
         condition: service_healthy
       object-storage:
@@ -309,6 +373,8 @@ services:
     depends_on:
       database:
         condition: service_healthy
+      pgbouncer:
+        condition: service_started
       redis:
         condition: service_healthy
       bootstrap-roles:
@@ -328,6 +394,8 @@ services:
     depends_on:
       database:
         condition: service_healthy
+      pgbouncer:
+        condition: service_started
       redis:
         condition: service_healthy
       bootstrap-roles:
@@ -350,6 +418,8 @@ services:
     depends_on:
       database:
         condition: service_healthy
+      pgbouncer:
+        condition: service_started
       redis:
         condition: service_healthy
       migrate:
@@ -442,3 +512,4 @@ volumes:
   grafana-data:
   monitoring-secrets:
   prometheus-multiproc:
+  pgbouncer-secrets:

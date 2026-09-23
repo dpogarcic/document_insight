@@ -1,5 +1,6 @@
 """Execute authorization-first hybrid retrieval and evidence-grounded generation."""
 
+from collections.abc import Awaitable, Callable
 from time import perf_counter
 from uuid import UUID
 
@@ -54,6 +55,7 @@ class QueryPreparationService:
         rerankers: RerankerFactory,
         generators: GroundedAnswerGeneratorFactory,
         metrics: QueryMetrics | None = None,
+        release_database_session: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._active_profiles = active_profiles
         self._profile_resolver = profile_resolver
@@ -63,6 +65,10 @@ class QueryPreparationService:
         self._rerankers = rerankers
         self._generators = generators
         self._metrics = metrics or NullQueryMetrics()
+        # API reads release their connection before external provider waits. A later
+        # retrieval starts a new transaction with the same verified actor context.
+        # Optional because evaluation callers own their enclosing session lifecycle.
+        self._release_database_session = release_database_session
 
     async def prepare(self, command: PrepareQueryCommand) -> AuthorizedRetrievalRequest:
         """Build an authorization-bounded request without reading chunks or invoking models."""
@@ -153,6 +159,12 @@ class QueryPreparationService:
             self._metrics.observe_candidate_count(
                 "vector_retrieval", sum(len(candidates) for candidates in vector_lists)
             )
+            # Every remaining stage (fusion, reranking, evidence selection, generation)
+            # works only on chunks already fetched into memory above; releasing the
+            # database connection here keeps it from sitting idle through the
+            # reranking and generation provider round trips.
+            if self._release_database_session is not None:
+                await self._release_database_session()
             fusion_started_at = perf_counter()
             try:
                 fused = self._fuse(
@@ -262,6 +274,10 @@ class QueryPreparationService:
         """Embed once per compatible cohort and never compare raw cross-cohort scores."""
         result: list[tuple[RetrievedChunk, ...]] = []
         for profile_id, configuration in profile.embedding_configurations:
+            # Profile and lexical data are materialized. End the read transaction
+            # before waiting for embeddings; the next SQL transaction rebinds RLS.
+            if self._release_database_session is not None:
+                await self._release_database_session()
             embedding_started_at = perf_counter()
             try:
                 vector = (

@@ -207,3 +207,23 @@ async def test_login_rejects_invalid_credentials_without_user_disclosure(
             "message": "The email address or password is invalid.",
         }
     }
+
+
+@pytest.mark.anyio
+async def test_membership_lookup_releases_transaction_before_downstream_work(
+    auth_client: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
+) -> None:
+    """Slow provider work must not pin the separate authentication connection."""
+    from document_insight.api.dependencies import get_current_user
+    from document_insight.application.auth.models import AuthorizationContext, UserRole
+
+    client, session_factory = auth_client
+    registered = (await client.post("/auth/register", json=REGISTER_PAYLOAD)).json()
+    claims = AuthorizationContext(
+        UUID(registered["user_id"]), UUID(registered["tenant_id"]), (), UserRole.VIEWER
+    )
+    async with session_factory() as session:
+        actor = await get_current_user(claims, session)
+        assert not session.in_transaction()
+        assert actor.role == UserRole.TENANT_ADMIN
+        assert actor.department_ids == tuple(UUID(value) for value in registered["department_ids"])

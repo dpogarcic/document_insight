@@ -63,13 +63,31 @@ def _set_transaction_context(
         )
 
 
+def _postgres_engine_kwargs() -> dict[str, object]:
+    """Bound application checkouts while PgBouncer bounds server connections.
+
+    Disable asyncpg's own statement cache. SQLAlchemy has a separate prepared
+    statement cache; the pinned PgBouncer 1.24 deployment enables
+    protocol-level prepared statement tracking by default for transaction pooling.
+    """
+    settings = get_settings()
+    return {
+        "pool_size": settings.database_pool_size,
+        "max_overflow": settings.database_max_overflow,
+        # Fail fast under saturation. SQLAlchemy's own default (30s) would make
+        # every caller wait nearly half a minute for the same safe 503 a short
+        # timeout returns immediately; a stuck request is not more available.
+        "pool_timeout": settings.database_pool_timeout_seconds,
+        "connect_args": {"statement_cache_size": 0},
+    }
+
+
 @lru_cache
 def get_engine(role: DatabaseRole = "read") -> AsyncEngine:
     """Create one process-wide async engine per restricted database role."""
-    return create_async_engine(
-        _database_url(role),
-        pool_pre_ping=True,
-    )
+    url = _database_url(role)
+    extra = _postgres_engine_kwargs() if url.startswith("postgresql") else {}
+    return create_async_engine(url, pool_pre_ping=True, **extra)
 
 
 @lru_cache

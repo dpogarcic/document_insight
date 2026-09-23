@@ -4,6 +4,7 @@ import asyncio
 import json
 
 import httpx
+import pytest
 
 from document_insight.application.configuration.models import EmbeddingConfiguration
 from document_insight.application.processing.exceptions import EmbeddingError
@@ -68,7 +69,7 @@ def test_embed_rejects_a_vector_with_the_wrong_profile_dimension() -> None:
 
 
 def test_embed_retries_a_mistral_rate_limit() -> None:
-    """The first RAG call waits for the provider's slower free-tier window."""
+    """Background embedding retries a transient provider rate limit."""
     requests = 0
     delays: list[float] = []
 
@@ -94,3 +95,27 @@ def test_embed_retries_a_mistral_rate_limit() -> None:
     assert result == ((0.6, 0.8),)
     assert requests == 2
     assert delays == [5.0]
+
+
+def test_interactive_embedding_does_not_retry_provider_saturation() -> None:
+    """Query callers can fail promptly while ingestion retains bounded retries."""
+    requests = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(429)
+
+    async def unexpected_sleep(delay: float) -> None:
+        raise AssertionError("Interactive embedding must not sleep on rate limiting")
+
+    embedder = MistralTextEmbedder(
+        "https://api.mistral.ai/v1",
+        "test-token",
+        httpx.MockTransport(handler),
+        sleep=unexpected_sleep,
+        retry_rate_limits=False,
+    )
+    with pytest.raises(EmbeddingError, match="provider_rejected_http_429"):
+        asyncio.run(embedder.embed(("question",), embedding_configuration()))
+    assert requests == 1

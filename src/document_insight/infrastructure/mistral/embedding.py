@@ -57,11 +57,14 @@ class MistralTextEmbedder(TextEmbedder):
         api_key: str,
         transport: httpx.AsyncBaseTransport | None = None,
         sleep: Sleep = asyncio.sleep,
+        *,
+        retry_rate_limits: bool = True,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._transport = transport
         self._sleep = sleep
+        self._max_attempts = MAX_RATE_LIMIT_ATTEMPTS if retry_rate_limits else 1
 
     async def embed(
         self, texts: tuple[str, ...], configuration: EmbeddingConfiguration
@@ -71,14 +74,14 @@ class MistralTextEmbedder(TextEmbedder):
             return ()
         metrics = ProviderCallMetrics("mistral", "embedding")
         try:
-            for attempt in range(MAX_RATE_LIMIT_ATTEMPTS):
+            for attempt in range(self._max_attempts):
                 async with httpx.AsyncClient(timeout=60.0, transport=self._transport) as client:
                     response = await client.post(
                         f"{self._base_url}/embeddings",
                         headers={"Authorization": f"Bearer {self._api_key}"},
                         json=_EmbeddingRequest(model=configuration.model, input=texts).model_dump(),
                     )
-                if response.status_code == 429 and attempt + 1 < MAX_RATE_LIMIT_ATTEMPTS:
+                if response.status_code == 429 and attempt + 1 < self._max_attempts:
                     delay = retry_delay_seconds(attempt)
                     logger.info(
                         "provider request retry scheduled",
@@ -147,12 +150,15 @@ class MistralTextEmbedder(TextEmbedder):
 class MistralTextEmbedderFactory(TextEmbedderFactory):
     """Create the explicit Mistral embedding adapter selected by a profile."""
 
-    def __init__(self, base_url: str, api_key: str) -> None:
+    def __init__(self, base_url: str, api_key: str, *, retry_rate_limits: bool = True) -> None:
         self._base_url = base_url
         self._api_key = api_key
+        self._retry_rate_limits = retry_rate_limits
 
     def create(self, configuration: EmbeddingConfiguration) -> TextEmbedder:
         """Return Mistral only for profiles that explicitly select it."""
         if configuration.provider != "mistral":
             raise ValueError(f"Unsupported embedding provider: {configuration.provider}")
-        return MistralTextEmbedder(self._base_url, self._api_key)
+        return MistralTextEmbedder(
+            self._base_url, self._api_key, retry_rate_limits=self._retry_rate_limits
+        )

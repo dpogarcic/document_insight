@@ -1,0 +1,18 @@
+{
+  "api_workers": 4,
+  "database_host": "pgbouncer",
+  "application_pool_size_per_role_per_worker": 10,
+  "application_max_overflow_per_role_per_worker": 20,
+  "application_pool_timeout_s": 5,
+  "pgbouncer_image": "pgbouncer/pgbouncer:1.24.1",
+  "pgbouncer_pool_mode": "transaction",
+  "pgbouncer_default_pool_size_per_role": 10,
+  "pgbouncer_max_db_connections": 80,
+  "pgbouncer_query_wait_timeout_s": 5,
+  "query_quota_requests": 30,
+  "query_quota_window_s": 60,
+  "interactive_embedding_rate_limit_retries": false,
+  "background_embedding_rate_limit_attempts": 4,
+  "auth_source_sha256": "6f92e1b0f54292fb878002527b81531f7c78275b933b102e97ca0ece123c21f9",
+  "query_composition_sha256": "ef8e6b3e05dedd1336f097ad88ac5cedaf3e7116dfc3af9395ed8f184efec5bf"
+}

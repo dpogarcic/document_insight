@@ -4,6 +4,8 @@ import logging
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from document_insight.api.middleware.correlation_id import correlation_id_scope
 from document_insight.application.auth.exceptions import (
@@ -165,6 +167,34 @@ def register_exception_handlers(app: FastAPI) -> None:
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "query_provider_unavailable",
             "Document query processing is temporarily unavailable. Please retry.",
+        )
+
+    @app.exception_handler(SQLAlchemyTimeoutError)
+    @app.exception_handler(OperationalError)
+    async def handle_database_unavailable(
+        request: Request,
+        exception: Exception,
+    ) -> JSONResponse:
+        """Report exhausted connection pools or refused connections as retryable, not a bug.
+
+        Both exceptions are connection-level (a pool checkout timeout, or PostgreSQL/
+        PgBouncer itself refusing a new connection), never a malformed query. The
+        error message and logs never include SQL text or parameter values.
+        """
+        with correlation_id_scope(request.state.correlation_id):
+            logger.warning(
+                "Database connection unavailable",
+                extra={
+                    "request_method": request.method,
+                    "request_path": request.url.path,
+                    "error_type": type(exception).__name__,
+                },
+            )
+        return error_response(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "database_unavailable",
+            "The service is temporarily unable to reach the database. Please retry shortly.",
+            headers={"Retry-After": "1"},
         )
 
     @app.exception_handler(Exception)

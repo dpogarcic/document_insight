@@ -176,7 +176,11 @@ async def get_current_user(
             "A valid bearer access token is required.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return AuthorizationContext(user.id, user.tenant_id, departments, UserRole(user.role))
+    actor = AuthorizationContext(user.id, user.tenant_id, departments, UserRole(user.role))
+    # Membership is now a detached value. Do not pin an authentication connection
+    # while downstream retrieval, object storage, or model calls are running.
+    await session.close()
+    return actor
 
 
 CurrentUser = Annotated[AuthorizationContext, Depends(get_current_user)]
@@ -337,6 +341,8 @@ def get_query_preparation_service(
         embedders=MistralTextEmbedderFactory(
             settings.mistral_base_url,
             _mistral_api_key(settings),
+            # Interactive callers should receive backpressure, not 35s of retry sleeps.
+            retry_rate_limits=False,
         ),
         rerankers=MistralRerankerFactory(
             settings.mistral_base_url,
@@ -347,4 +353,5 @@ def get_query_preparation_service(
             _mistral_api_key(settings),
         ),
         metrics=PrometheusQueryMetrics(),
+        release_database_session=session.close,
     )

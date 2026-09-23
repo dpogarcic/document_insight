@@ -7,6 +7,8 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import Request
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from document_insight.api.app import create_app
 from document_insight.api.logging_config import CorrelationIdFormatter
@@ -155,7 +157,50 @@ def test_application_registers_domain_exception_handlers() -> None:
     }
 
     assert expected_exceptions <= application.exception_handlers.keys()
+    assert SQLAlchemyTimeoutError in application.exception_handlers
+    assert OperationalError in application.exception_handlers
     assert Exception in application.exception_handlers
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "exception",
+    [
+        SQLAlchemyTimeoutError("QueuePool limit of size 5 overflow 10 reached"),
+        OperationalError("SELECT 1", {}, Exception("too many connections")),
+    ],
+    ids=["pool_checkout_timeout", "connection_refused"],
+)
+async def test_database_unavailable_returns_safe_retryable_error(
+    caplog: pytest.LogCaptureFixture,
+    exception: Exception,
+) -> None:
+    """A pool-exhaustion or connection-refusal failure is a 503, not a bare 500."""
+    application = create_app()
+
+    @application.get("/_test/database-unavailable")
+    async def raise_database_error() -> None:
+        raise exception
+
+    transport = ASGITransport(app=application, raise_app_exceptions=False)
+    with caplog.at_level(
+        logging.WARNING,
+        logger="document_insight.api.exception_handlers",
+    ):
+        async with AsyncClient(transport=transport, base_url="http://testserver") as test_client:
+            response = await test_client.get("/_test/database-unavailable")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {
+            "code": "database_unavailable",
+            "message": "The service is temporarily unable to reach the database. Please retry shortly.",
+        }
+    }
+    assert response.headers["retry-after"] == "1"
+    warning_record = caplog.records[-1]
+    assert warning_record.getMessage() == "Database connection unavailable"
+    assert warning_record.__dict__["request_path"] == "/_test/database-unavailable"
 
 
 @pytest.mark.anyio

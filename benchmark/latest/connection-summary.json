@@ -1,0 +1,8 @@
+{
+  "sample_count": 5,
+  "sample_interval_s": 5,
+  "window_start_estimated": false,
+  "peak_client_backends": 25,
+  "peak_idle_in_transaction": 11,
+  "oldest_transaction_s": 0.206802
+}

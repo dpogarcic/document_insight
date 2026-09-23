@@ -790,6 +790,7 @@ async def test_query_route_never_sends_denied_passages_to_generation(
             embedders=_Embedders(),
             rerankers=_Rerankers(),
             generators=_Generators(),
+            release_database_session=session.close,
         )
 
     app = create_app()

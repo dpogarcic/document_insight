@@ -5,7 +5,7 @@ content, and answering questions over authorized document evidence.
 
 ## Project status
 
-**Core vertical slice implemented and tested; CI/CD pipeline and load-test benchmark are not yet added.**
+**Core vertical slice implemented and tested; CI/CD pipeline is not yet added.**
 
 Authentication, ingestion, processing, and query are implemented end to end. Local
 registration and login are connected to PostgreSQL with Argon2 password hashing and
@@ -26,9 +26,15 @@ stack provides metrics, per-stage duration timing, and dashboards, with a correl
 propagated through logs across the API, queue, and worker boundaries — not yet a formal
 distributed-tracing backend (see ADR 005).
 
+A [`benchmark/`](benchmark/README.md) load test drives `POST /query` at a configured
+aggregate rate across throwaway tenants. The default is 100 users at 100 requests/s
+for 20 seconds, within the default per-user quota. [`benchmark/results.md`](benchmark/results.md)
+summarizes the latest run, remaining bottlenecks, and capacity expectations. Reports separate
+HTTP outcomes, client failures, latency, and scheduler lag; HTTP success alone is not an
+answer-quality evaluation.
+
 Not yet done: the CI/CD pipeline (lint/test/security-scan on push, image build/push on
-main) and the `benchmark/` load-test script and results summary are both required
-deliverables per `Tech_Assignment.pdf` and are still outstanding.
+main) is a required deliverable per `Tech_Assignment.pdf` and is still outstanding.
 
 ## Planned capabilities
 
@@ -49,6 +55,8 @@ deliverables per `Tech_Assignment.pdf` and are still outstanding.
   optional tools, local endpoints, startup jobs, and the [tenant evaluation workflow](docs/application/README.md#evaluation-suites-and-manual-quality-gate).
 - [Architecture](docs/ARCHITECTURE.md) - system diagram, component responsibilities,
   data flow, deployment position, and trade-offs.
+- [Autoscaling guide](docs/AUTOSCALING.md) - provisional users-per-API-worker estimates,
+  scaling thresholds, shared capacity limits, and benchmark validation requirements.
 - [ADR 001: Service boundaries](docs/adr/001-service-boundaries.md) - API, service
   boundaries, storage, provider configuration, and retrieval design.
 - [ADR 002: Async processing and versioning](docs/adr/002-async-processing.md) - jobs,
@@ -63,6 +71,8 @@ deliverables per `Tech_Assignment.pdf` and are still outstanding.
   profile retirement.
 - [Code quality standards](docs/CODE_QUALITY.md) - typing, testing, coverage,
   documentation, security, and merge expectations.
+- [Load test](benchmark/README.md) and [results](benchmark/results.md) - open-loop
+  `POST /query` benchmark, methodology, and the connection-pool finding it surfaced.
 - [AI Tech Lead assignment](Tech_Assignment.pdf) - original project brief.
 
 Reranking and generation instructions are stored in fingerprinted capability snapshots.

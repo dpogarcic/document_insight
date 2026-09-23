@@ -255,6 +255,85 @@ async def test_query_applies_the_same_trusted_scope_to_every_retrieval_branch() 
 
 
 @pytest.mark.anyio
+async def test_database_session_is_released_before_reranking_and_generation() -> None:
+    """Retrieval is the only stage that needs the database; release it right after."""
+    tenant_id, department_id, profile_id = (uuid4() for _ in range(3))
+    chunk = RetrievedChunk(uuid4(), uuid4(), uuid4(), "Contract", "Annual renewal.", 2, 0.8)
+    events: list[str] = []
+
+    async def release() -> None:
+        events.append("session_released")
+
+    class RecordingEmbedder(Embedder):
+        async def embed(
+            self, texts: tuple[str, ...], configuration: EmbeddingConfiguration
+        ) -> tuple[tuple[float, ...], ...]:
+            assert events[-1] == "session_released"
+            events.append("embedded")
+            return await super().embed(texts, configuration)
+
+    class RecordingEmbedders(Embedders):
+        def create(self, configuration: EmbeddingConfiguration) -> Embedder:
+            return RecordingEmbedder()
+
+    class RecordingReranker(Reranker):
+        async def rerank(
+            self,
+            question: str,
+            candidates: tuple[RerankInput, ...],
+            configuration: RerankingConfiguration,
+        ) -> tuple[RerankScore, ...]:
+            events.append("reranked")
+            return await super().rerank(question, candidates, configuration)
+
+    class RecordingGenerator(Generator):
+        async def generate(
+            self,
+            question: str,
+            passages: tuple[GroundingPassage, ...],
+            configuration: GenerationConfiguration,
+        ) -> GroundedAnswer:
+            events.append("generated")
+            return await super().generate(question, passages, configuration)
+
+    service = QueryPreparationService(
+        active_profiles=ActiveProfiles(profile_id),
+        profile_resolver=Profiles(build_profile(profile_id)),
+        departments=Departments((department_id,)),
+        retrieval=Retrieval(chunk),
+        embedders=RecordingEmbedders(),
+        rerankers=_SingleRerankerFactory(RecordingReranker()),
+        generators=_SingleGeneratorFactory(RecordingGenerator()),
+        release_database_session=release,
+    )
+    await service.query(
+        PrepareQueryCommand(
+            "When does it renew?",
+            None,
+            5,
+            AuthorizationContext(uuid4(), tenant_id, (department_id,), UserRole.TENANT_ADMIN),
+        )
+    )
+    assert events == ["session_released", "embedded", "session_released", "reranked", "generated"]
+
+
+@dataclass
+class _SingleRerankerFactory:
+    reranker: Reranker
+
+    def create(self, configuration: RerankingConfiguration) -> Reranker:
+        return self.reranker
+
+
+@dataclass
+class _SingleGeneratorFactory:
+    generator: Generator
+
+    def create(self, configuration: GenerationConfiguration) -> Generator:
+        return self.generator
+
+
+@pytest.mark.anyio
 async def test_evaluation_uses_explicit_profile_and_scoped_corpus_with_stage_trace() -> None:
     tenant_id, department_id, profile_id, version_id = (uuid4() for _ in range(4))
     chunk = RetrievedChunk(uuid4(), uuid4(), version_id, "Contract", "Annual renewal.", 2, 0.8)

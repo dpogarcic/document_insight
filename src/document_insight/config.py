@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     database_reconciler_password: SecretStr | None = None
     database_monitor_password: SecretStr | None = None
     database_profile_operator_password: SecretStr | None = None
+    database_pool_size: int = Field(default=10, ge=1)
+    database_max_overflow: int = Field(default=20, ge=0)
+    database_pool_timeout_seconds: int = Field(default=5, ge=1)
     admin_panel_username: str | None = None
     admin_panel_password: SecretStr | None = None
     admin_panel_secure_cookies: bool = False
