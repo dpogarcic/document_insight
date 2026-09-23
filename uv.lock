@@ -728,7 +728,7 @@ requires-dist = [
     { name = "redis", specifier = ">=6,<7" },
     { name = "rq", specifier = ">=2,<3" },
     { name = "spacy", specifier = ">=3.8,<4" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0,<3" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.54,<3" },
     { name = "uvicorn", specifier = ">=0.34,<1" },
 ]
 
