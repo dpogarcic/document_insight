@@ -683,6 +683,7 @@ async def test_query_route_never_sends_denied_passages_to_generation(
         get_current_user,
         get_db_session,
         get_query_preparation_service,
+        get_query_rate_limiter,
     )
     from document_insight.application.auth.models import (
         AuthorizationContext,
@@ -710,6 +711,7 @@ async def test_query_route_never_sends_denied_passages_to_generation(
     from document_insight.infrastructure.retrieval.repository import (
         SqlAlchemyAuthorizedRetrievalRepository,
     )
+    from document_insight.infrastructure.security.query_rate_limiter import RateLimitDecision
     from document_insight.infrastructure.security.token_issuer import JwtTokenIssuer
 
     settings = _DatabaseTestSettings()
@@ -757,6 +759,12 @@ async def test_query_route_never_sends_denied_passages_to_generation(
         def create(self, configuration: object) -> _Generator:
             return _Generator()
 
+    class _AllowQueryLimiter:
+        async def acquire(
+            self, tenant_id: UUID, user_id: UUID, limit: int, window_seconds: int
+        ) -> RateLimitDecision:
+            return RateLimitDecision(True, window_seconds)
+
     async def read_session() -> AsyncIterator[AsyncSession]:
         async with read_sessions() as session:
             yield session
@@ -788,6 +796,7 @@ async def test_query_route_never_sends_denied_passages_to_generation(
     app.dependency_overrides[get_db_session] = read_session
     app.dependency_overrides[get_auth_db_session] = auth_session
     app.dependency_overrides[get_query_preparation_service] = query_service
+    app.dependency_overrides[get_query_rate_limiter] = _AllowQueryLimiter
     actor = isolation_rows.tenant_a_viewer
     configuration = get_settings()
     token = (

@@ -64,6 +64,17 @@ JOB_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     },
 }
 
+QUERY_RATE_LIMIT_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    status.HTTP_429_TOO_MANY_REQUESTS: {
+        "model": ErrorDTO,
+        "description": "The authenticated user has exhausted their query quota.",
+    },
+    status.HTTP_503_SERVICE_UNAVAILABLE: {
+        "model": ErrorDTO,
+        "description": "The query rate limiter is temporarily unavailable.",
+    },
+}
+
 
 def raise_api_error(
     status_code: int,

@@ -4,7 +4,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from document_insight.api.dependencies import get_current_user, get_query_preparation_service
+from document_insight.api.dependencies import (
+    enforce_query_rate_limit,
+    get_current_user,
+    get_query_preparation_service,
+)
+from document_insight.api.errors import QUERY_RATE_LIMIT_ERROR_RESPONSES
 from document_insight.api.schemas.query import (
     DetectedEntityDTO,
     QueryDTO,
@@ -21,10 +26,12 @@ router = APIRouter(tags=["query"])
 @router.post(
     "/query",
     response_model=QueryDTO,
+    responses=QUERY_RATE_LIMIT_ERROR_RESPONSES,
 )
 async def query_documents(
     request: QueryRequest,
     current_user: Annotated[AuthorizationContext, Depends(get_current_user)],
+    _rate_limit: Annotated[None, Depends(enforce_query_rate_limit)],
     service: Annotated[QueryPreparationService, Depends(get_query_preparation_service)],
 ) -> QueryDTO:
     """Execute one authorization-bounded hybrid RAG query."""

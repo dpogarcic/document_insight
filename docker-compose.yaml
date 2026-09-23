@@ -19,6 +19,8 @@ services:
       - S3_BUCKET_NAME=${S3_BUCKET_NAME:?Set S3_BUCKET_NAME in .env}
       - S3_REGION=${S3_REGION:?Set S3_REGION in .env}
       - REDIS_URL=${REDIS_URL:?Set REDIS_URL in .env}
+      - QUERY_RATE_LIMIT_REQUESTS=${QUERY_RATE_LIMIT_REQUESTS:-30}
+      - QUERY_RATE_LIMIT_WINDOW_SECONDS=${QUERY_RATE_LIMIT_WINDOW_SECONDS:-60}
       - RQ_INGESTION_QUEUE_NAME=ingestion
       - METRICS_BEARER_TOKEN=${METRICS_BEARER_TOKEN:-}
       - PROMETHEUS_MULTIPROC_DIR=/run/prometheus-multiproc
@@ -112,6 +114,19 @@ services:
   # Redis service
   redis:
     image: redis:7.4-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis-test:
+    image: redis:7.4-alpine
+    profiles: [test]
+    ports:
+      - "127.0.0.1:6380:6379"
+    tmpfs:
+      - /data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

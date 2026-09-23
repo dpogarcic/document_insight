@@ -141,17 +141,18 @@ Document department membership uses the separate many-to-many model described in
 
 ### Query
 
-1. The API authenticates the caller and derives the tenant, department, and role authorization scope.
-2. It resolves exactly one active query profile and builds an immutable retrieval request with
+1. The API authenticates the caller, refreshes their current membership, and derives the tenant, department, and role authorization scope.
+2. A Redis-backed per-user quota atomically reserves the query before retrieval or provider work. The API returns `429` with `Retry-After` when the quota is exhausted and `503` when the quota store cannot be checked.
+3. It resolves exactly one active query profile and builds an immutable retrieval request with
    mandatory tenant and department predicates derived only from the authenticated identity. An
    optional text `filter` is carried to entity matching and lexical retrieval; it never changes
    authorization scope. This preparation completes before any entity, lexical, or vector data is read.
-3. It applies that scope before entity matching, lexical retrieval, and vector retrieval.
-3. Query entities may add a document-level candidate or modest document-level boost. They do not select chunks or citations and are never a mandatory retrieval filter.
-4. It fuses lexical and vector chunk candidates with RRF, reranks them, applies the configured
+4. It applies that scope before entity matching, lexical retrieval, and vector retrieval.
+5. Query entities may add a document-level candidate or modest document-level boost. They do not select chunks or citations and are never a mandatory retrieval filter.
+6. It fuses lexical and vector chunk candidates with RRF, reranks them, applies the configured
    insufficient-evidence and citation-quality thresholds, then sends only citable authorized
    passages to the configured generation provider.
-5. The provider must return valid references to those supplied passages. The response includes
+7. The provider must return valid references to those supplied passages. The response includes
    the answer, evidence-confidence score, detected entities, and citations to the exact document
    version and passage; an ungroundable answer is returned as insufficient evidence.
 

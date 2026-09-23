@@ -154,7 +154,13 @@ tracebacks use the response ID, while work outside an HTTP request uses `-`.
 | `GET` | `/documents` | List documents and visible departments within the caller's authorization scope | Implemented |
 | `POST` | `/documents/{document_id}/activate` | Tenant-admin-only explicit selection of a ready searchable version | Implemented |
 | `GET` | `/jobs/{job_id}` | Read an authorized processing-job status | Implemented |
-| `POST` | `/query` | Authenticate and prepare an authorization-bounded retrieval request | Implemented through retrieval preparation |
+| `POST` | `/query` | Authenticate, enforce a per-user quota, retrieve authorized evidence, and return a cited answer | Implemented |
+
+`POST /query` allows 30 requests per authenticated user per 60-second window by default.
+Set `QUERY_RATE_LIMIT_REQUESTS` and `QUERY_RATE_LIMIT_WINDOW_SECONDS` to change the quota.
+Redis shares the count across API instances. Once exhausted, the API returns `429` with
+`detail.code: "query_rate_limit_exceeded"` and a `Retry-After` header. If Redis cannot be
+checked, `/query` returns `503` and does not call retrieval or a model provider.
 
 Registration intentionally creates a new tenant. Joining an existing tenant will use a
 future administrator-controlled invitation flow; public registration cannot select an
@@ -218,15 +224,18 @@ its temporary data.
 docker compose --profile test up -d database-test
 docker compose --profile test run --build --rm test-migrate
 docker compose --profile test run --build --rm test-bootstrap-roles
+docker compose --profile test up -d redis-test
 uv run pytest -q -o addopts='' tests/integration
-docker compose --profile test rm -sf database-test
+docker compose --profile test rm -sf database-test redis-test
 ```
 
 The test database initializes a restricted runtime role automatically. Alembic uses
 the separate test owner role. The role bootstrap step enables six additional restricted
 login roles using passwords from `.env`. The RLS tests check role capabilities, direct
 SQL reads and writes, department revocation, editor assignment timing, ranked retrieval,
-and an authenticated `/query` response. Tests skip when the test URL is unset.
+and an authenticated `/query` response. The disposable Redis test checks that concurrent
+requests share one per-user quota. These checks skip when their respective test URLs are
+unset.
 
 ## First implementation scope
 

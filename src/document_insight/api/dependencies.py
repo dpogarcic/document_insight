@@ -6,6 +6,7 @@ from typing import Annotated
 import jwt
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from redis.asyncio import ConnectionPool, Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -62,6 +63,11 @@ from document_insight.infrastructure.retrieval.repository import (
     SqlAlchemyAuthorizedRetrievalRepository,
 )
 from document_insight.infrastructure.security.password_hasher import Argon2PasswordHasher
+from document_insight.infrastructure.security.query_rate_limiter import (
+    QueryRateLimiter,
+    RateLimitUnavailableError,
+    RedisQueryRateLimiter,
+)
 from document_insight.infrastructure.security.token_authenticator import JwtTokenAuthenticator
 from document_insight.infrastructure.security.token_issuer import JwtTokenIssuer
 from document_insight.infrastructure.tenant.repository import SqlAlchemyTenantRepository
@@ -179,6 +185,45 @@ CurrentUser = Annotated[AuthorizationContext, Depends(get_current_user)]
 def _bind_actor(session: AsyncSession, actor: AuthorizationContext) -> None:
     """Make the verified user available to RLS before the first database statement."""
     session.info["rls_actor_id"] = actor.user_id
+
+
+@lru_cache
+def _query_rate_limit_redis(redis_url: str) -> Redis:
+    """Share one Redis connection pool across API requests in this process."""
+    return Redis(connection_pool=ConnectionPool.from_url(redis_url))
+
+
+def get_query_rate_limiter(settings: ApplicationSettings) -> QueryRateLimiter:
+    """Compose the shared per-user query limiter."""
+    return RedisQueryRateLimiter(_query_rate_limit_redis(settings.redis_url))
+
+
+async def enforce_query_rate_limit(
+    actor: CurrentUser,
+    settings: ApplicationSettings,
+    limiter: Annotated[QueryRateLimiter, Depends(get_query_rate_limiter)],
+) -> None:
+    """Reject an over-quota query before retrieval or provider work begins."""
+    try:
+        decision = await limiter.acquire(
+            actor.tenant_id,
+            actor.user_id,
+            settings.query_rate_limit_requests,
+            settings.query_rate_limit_window_seconds,
+        )
+    except RateLimitUnavailableError:
+        raise_api_error(
+            503,
+            "query_rate_limit_unavailable",
+            "Document queries are temporarily unavailable. Please retry.",
+        )
+    if not decision.allowed:
+        raise_api_error(
+            429,
+            "query_rate_limit_exceeded",
+            "Query rate limit exceeded. Please retry later.",
+            headers={"Retry-After": str(decision.retry_after_seconds)},
+        )
 
 
 def get_object_storage(settings: ApplicationSettings) -> S3OriginalObjectStorage:

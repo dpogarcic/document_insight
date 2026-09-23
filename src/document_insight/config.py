@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     s3_region: str = "us-east-1"
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, ge=10 * 1024 * 1024)
     redis_url: str = "redis://localhost:6379/0"
+    query_rate_limit_requests: int = Field(default=30, ge=1, le=10_000)
+    query_rate_limit_window_seconds: int = Field(default=60, ge=1, le=86_400)
     rq_ingestion_queue_name: str = "ingestion"
     job_reconciliation_interval_seconds: int = Field(default=60, ge=5, le=3600)
     metrics_bearer_token: SecretStr | None = None

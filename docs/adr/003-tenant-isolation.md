@@ -77,7 +77,7 @@ never changes or overrides the tenant, department, role, or document-permission 
 
 ### Abuse protection, privacy, and auditing
 
-- A default per-user rate limit protects `POST /query`; limits are configurable and return a clear `429` response when exceeded.
+- An atomic Redis counter limits `POST /query` per authenticated tenant/user across API instances. The default is 30 requests in a 60-second window from the first request; `QUERY_RATE_LIMIT_REQUESTS` and `QUERY_RATE_LIMIT_WINDOW_SECONDS` configure it. The API checks quota before retrieval or provider calls, returns `429` with `Retry-After` when exhausted, and fails closed with `503` when Redis cannot be checked. This API quota is separate from retries after a model provider's `429` response.
 - Each request receives a correlation ID propagated to the API, queued job, worker, database audit fields where useful, and structured logs.
 - Logs record request lifecycle, authorization result, latency, status, and safe IDs. They must not contain raw document text, bearer tokens, passwords, or provider API keys.
 
