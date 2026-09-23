@@ -45,6 +45,13 @@ dependency, base-image, and GitHub Actions update pull requests through the same
 See the [CI/CD scope](docs/ARCHITECTURE.md#cicd-scope-and-delivery-boundary) for the
 assignment interpretation and rationale.
 
+## Frontend application
+
+A companion Next.js frontend lives in a separate repository:
+[document_insight_application](https://github.com/dpogarcic/document_insight_application).
+It provides the document library, upload, version-activation, and query/chat UI against
+this API.
+
 ## Planned capabilities
 
 - Upload PDFs and images, including replacement uploads that create immutable document
