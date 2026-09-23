@@ -174,6 +174,15 @@ transition, queries search explicitly enabled compatible cohorts separately and 
 ranked results rather than comparing scores across incompatible vector spaces. See ADR 004
 for the profile, activation, and audit model.
 
+A private platform-operator CLI stages and validates profiles and atomically activates
+ingestion or query bundles with an expected revision and audit reason. It rejects a query
+bundle that omits a cohort used by a ready generation, and rejects an ingestion bundle
+until the active query bundle can read its new lexical and embedding cohorts.
+An optional, separately authenticated Admin Panel serves the same operator workflow on
+the loopback-bound Compose port 8001. It has only the dedicated profile-operator database
+credential and cannot read tenant document content. Production access requires an internal
+TLS-protected ingress; the document API remains the only public service.
+
 Reranking and generation system instructions are part of their immutable capability
 snapshots and are supplied to the model from the resolved query profile. Prompt edits
 therefore create new profile versions. Authorization, evidence selection, structured

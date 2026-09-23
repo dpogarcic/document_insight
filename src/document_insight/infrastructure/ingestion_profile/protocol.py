@@ -21,3 +21,9 @@ class IngestionProfileRepository(Protocol):
 
     async def get(self, profile_id: UUID) -> IngestionProfile | None:
         """Return one ingestion profile by ID."""
+
+    async def list_all(self) -> tuple[IngestionProfile, ...]:
+        """Return immutable ingestion bundles newest first."""
+
+    async def create(self, profile: IngestionProfile) -> None:
+        """Persist one immutable ingestion bundle."""

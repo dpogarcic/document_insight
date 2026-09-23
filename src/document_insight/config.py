@@ -25,12 +25,17 @@ class Settings(BaseSettings):
     database_worker_url: str | None = None
     database_reconciler_url: str | None = None
     database_monitor_url: str | None = None
+    database_profile_operator_url: str | None = None
     database_read_password: SecretStr | None = None
     database_write_password: SecretStr | None = None
     database_auth_password: SecretStr | None = None
     database_worker_password: SecretStr | None = None
     database_reconciler_password: SecretStr | None = None
     database_monitor_password: SecretStr | None = None
+    database_profile_operator_password: SecretStr | None = None
+    admin_panel_username: str | None = None
+    admin_panel_password: SecretStr | None = None
+    admin_panel_secure_cookies: bool = False
     jwt_secret_key: SecretStr
     jwt_algorithm: Literal["HS256"] = "HS256"
     jwt_issuer: str = "document-insight"

@@ -1,6 +1,6 @@
 """Unit tests for authorization-first hybrid RAG."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from uuid import UUID, uuid4
 
 import pytest
@@ -361,3 +361,71 @@ async def test_prepare_requires_an_explicit_active_query_profile() -> None:
                 "Question", None, 5, AuthorizationContext(uuid4(), uuid4(), (), UserRole.VIEWER)
             )
         )
+
+
+@pytest.mark.anyio
+async def test_query_embeds_with_each_persisted_cohort_and_cites_older_index() -> None:
+    """New query behavior can retrieve a document indexed with an earlier embedding profile."""
+    profile_id, old_id, new_id, tenant_id, department_id = (uuid4() for _ in range(5))
+    old_chunk = RetrievedChunk(
+        uuid4(), uuid4(), uuid4(), "Earlier policy", "Annual renewal.", 1, 0.8
+    )
+    base = build_profile(profile_id)
+    old_config = base.embedding_configurations[0][1].model_copy(update={"model": "old-embed"})
+    new_config = base.embedding_configurations[0][1].model_copy(update={"model": "new-embed"})
+    profile = replace(
+        base,
+        embedding_profile_ids=(old_id, new_id),
+        embedding_configurations=((old_id, old_config), (new_id, new_config)),
+    )
+    models_used: list[str] = []
+    searched: list[UUID] = []
+
+    class CohortEmbedder:
+        async def embed(
+            self, texts: tuple[str, ...], configuration: EmbeddingConfiguration
+        ) -> tuple[tuple[float, ...], ...]:
+            models_used.append(configuration.model)
+            return ((1.0, 0.0),)
+
+    class CohortEmbedders:
+        def create(self, configuration: EmbeddingConfiguration) -> CohortEmbedder:
+            return CohortEmbedder()
+
+    class CohortRetrieval(Retrieval):
+        async def lexical_search(
+            self, scope: RetrievalScope, lexical_profile_id: UUID, query_text: str, limit: int
+        ) -> tuple[RetrievedChunk, ...]:
+            return ()
+
+        async def vector_search(
+            self,
+            scope: RetrievalScope,
+            embedding_profile_id: UUID,
+            vector: tuple[float, ...],
+            limit: int,
+        ) -> tuple[RetrievedChunk, ...]:
+            searched.append(embedding_profile_id)
+            return (old_chunk,) if embedding_profile_id == old_id else ()
+
+    service = QueryPreparationService(
+        active_profiles=ActiveProfiles(profile_id),
+        profile_resolver=Profiles(profile),
+        departments=Departments((department_id,)),
+        retrieval=CohortRetrieval(None),
+        embedders=CohortEmbedders(),
+        rerankers=Rerankers(),
+        generators=Generators(),
+    )
+    result = await service.query(
+        PrepareQueryCommand(
+            "When does it renew?",
+            None,
+            5,
+            AuthorizationContext(uuid4(), tenant_id, (department_id,), UserRole.VIEWER),
+        )
+    )
+
+    assert models_used == ["old-embed", "new-embed"]
+    assert searched == [old_id, new_id]
+    assert result.citations[0].document_version_id == old_chunk.document_version_id

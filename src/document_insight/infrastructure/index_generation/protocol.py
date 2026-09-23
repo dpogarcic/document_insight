@@ -47,3 +47,6 @@ class IndexGenerationRepository(Protocol):
 
     async def mark_ready(self, index_generation_id: UUID) -> None:
         """Mark a generation ready only after all derived stages are complete."""
+
+    async def referenced_ingestion_profile_ids(self) -> tuple[UUID, ...]:
+        """Return profiles still referenced by completed searchable generations."""

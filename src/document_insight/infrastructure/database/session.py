@@ -18,7 +18,9 @@ from sqlalchemy.orm.session import SessionTransaction
 
 from document_insight.config import get_settings
 
-DatabaseRole = Literal["read", "write", "auth", "worker", "reconciler", "monitor"]
+DatabaseRole = Literal[
+    "read", "write", "auth", "worker", "reconciler", "monitor", "profile_operator"
+]
 
 
 def _database_url(role: DatabaseRole) -> str:
@@ -31,6 +33,7 @@ def _database_url(role: DatabaseRole) -> str:
         "worker": settings.database_worker_url,
         "reconciler": settings.database_reconciler_url,
         "monitor": settings.database_monitor_url,
+        "profile_operator": settings.database_profile_operator_url,
     }[role]
     if url is not None:
         return url

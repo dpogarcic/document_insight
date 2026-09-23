@@ -51,3 +51,39 @@ class SqlAlchemyQueryProfileRepository(QueryProfileRepository):
             model.generation_profile_id,
             model.retrieval_snapshot_id,
         )
+
+    async def list_all(self) -> tuple[ResolvedQueryProfile, ...]:
+        """List bundles and their explicit cohorts."""
+        ids = await self._session.scalars(
+            select(QueryProfileModel.id).order_by(QueryProfileModel.created_at.desc())
+        )
+        result: list[ResolvedQueryProfile] = []
+        for identifier in ids:
+            profile = await self.get(identifier)
+            if profile is not None:
+                result.append(profile)
+        return tuple(result)
+
+    async def create(self, profile: ResolvedQueryProfile) -> None:
+        """Add a query bundle and compatible read-cohort associations."""
+        self._session.add(
+            QueryProfileModel(
+                id=profile.query_profile_id,
+                reranker_profile_id=profile.reranker_profile_id,
+                generation_profile_id=profile.generation_profile_id,
+                retrieval_snapshot_id=profile.retrieval_snapshot_id,
+            )
+        )
+        await self._session.flush()
+        self._session.add_all(
+            QueryProfileLexicalCohortModel(
+                query_profile_id=profile.query_profile_id, lexical_profile_id=profile_id
+            )
+            for profile_id in profile.lexical_profile_ids
+        )
+        self._session.add_all(
+            QueryProfileEmbeddingCohortModel(
+                query_profile_id=profile.query_profile_id, embedding_profile_id=profile_id
+            )
+            for profile_id in profile.embedding_profile_ids
+        )

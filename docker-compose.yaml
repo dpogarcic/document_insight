@@ -106,6 +106,7 @@ services:
       DATABASE_WORKER_PASSWORD: ${DATABASE_WORKER_PASSWORD:-}
       DATABASE_RECONCILER_PASSWORD: ${DATABASE_RECONCILER_PASSWORD:-}
       DATABASE_MONITOR_PASSWORD: ${DATABASE_MONITOR_PASSWORD:-}
+      DATABASE_PROFILE_OPERATOR_PASSWORD: ${DATABASE_PROFILE_OPERATOR_PASSWORD:-}
     depends_on:
       database-test:
         condition: service_healthy
@@ -178,16 +179,56 @@ services:
     command: uv run --no-sync python -m document_insight.infrastructure.database.bootstrap_roles
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
       DATABASE_READ_PASSWORD: ${DATABASE_READ_PASSWORD:?Set DATABASE_READ_PASSWORD in .env}
       DATABASE_WRITE_PASSWORD: ${DATABASE_WRITE_PASSWORD:?Set DATABASE_WRITE_PASSWORD in .env}
       DATABASE_AUTH_PASSWORD: ${DATABASE_AUTH_PASSWORD:?Set DATABASE_AUTH_PASSWORD in .env}
       DATABASE_WORKER_PASSWORD: ${DATABASE_WORKER_PASSWORD:?Set DATABASE_WORKER_PASSWORD in .env}
       DATABASE_RECONCILER_PASSWORD: ${DATABASE_RECONCILER_PASSWORD:?Set DATABASE_RECONCILER_PASSWORD in .env}
       DATABASE_MONITOR_PASSWORD: ${DATABASE_MONITOR_PASSWORD:?Set DATABASE_MONITOR_PASSWORD in .env}
+      DATABASE_PROFILE_OPERATOR_PASSWORD: ${DATABASE_PROFILE_OPERATOR_PASSWORD:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
     restart: "no"
+
+  profile-operator:
+    build: .
+    image: document-insight-app:latest
+    profiles: [operator]
+    entrypoint: ["uv", "run", "--no-sync", "python", "-m", "document_insight.application.configuration.operator_cli"]
+    command: ["--help"]
+    environment:
+      DATABASE_PROFILE_OPERATOR_URL: ${DATABASE_PROFILE_OPERATOR_URL:-}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:?Set MISTRAL_API_KEY in .env}
+    depends_on:
+      bootstrap-roles:
+        condition: service_completed_successfully
+    volumes:
+      - ./src:/app/src:ro
+      - ./profiles:/app/profiles:ro
+
+  admin-panel:
+    build: .
+    image: document-insight-app:latest
+    profiles: [admin]
+    ports:
+      - "127.0.0.1:8001:8001"
+    environment:
+      DATABASE_PROFILE_OPERATOR_URL: ${DATABASE_PROFILE_OPERATOR_URL:-}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:?Set MISTRAL_API_KEY in .env}
+      ADMIN_PANEL_USERNAME: ${ADMIN_PANEL_USERNAME:-}
+      ADMIN_PANEL_PASSWORD: ${ADMIN_PANEL_PASSWORD:-}
+      ADMIN_PANEL_SECURE_COOKIES: ${ADMIN_PANEL_SECURE_COOKIES:-false}
+    depends_on:
+      bootstrap-roles:
+        condition: service_completed_successfully
+    volumes:
+      - ./src:/app/src:ro
+    command: >
+      uv run --no-sync uvicorn --factory document_insight.admin_panel.app:create_app --host 0.0.0.0 --port 8001
 
   prometheus-multiproc-init:
     image: busybox:1.37.0

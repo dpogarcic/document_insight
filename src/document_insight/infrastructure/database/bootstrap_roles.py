@@ -14,6 +14,7 @@ _PASSWORD_SETTINGS = {
     "di_worker_login": "database_worker_password",
     "di_reconciler_login": "database_reconciler_password",
     "di_monitor_login": "database_monitor_password",
+    "di_profile_operator_login": "database_profile_operator_password",
 }
 
 
@@ -25,6 +26,10 @@ async def bootstrap_roles() -> None:
         async with engine.begin() as connection:
             for role, setting_name in _PASSWORD_SETTINGS.items():
                 secret = getattr(settings, setting_name)
+                if role == "di_profile_operator_login" and (
+                    secret is None or not secret.get_secret_value()
+                ):
+                    continue
                 if secret is None or not secret.get_secret_value():
                     raise ValueError(f"{setting_name.upper()} must not be empty")
                 quoted = await connection.scalar(

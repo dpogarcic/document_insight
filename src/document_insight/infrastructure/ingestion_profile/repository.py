@@ -32,3 +32,31 @@ class SqlAlchemyIngestionProfileRepository(IngestionProfileRepository):
             lexical_profile_id=model.lexical_profile_id,
             embedding_profile_id=model.embedding_profile_id,
         )
+
+    async def list_all(self) -> tuple[IngestionProfile, ...]:
+        """List bundle identities without loading member entities."""
+        models = await self._session.scalars(
+            select(IngestionProfileModel).order_by(IngestionProfileModel.created_at.desc())
+        )
+        return tuple(
+            IngestionProfile(
+                model.id,
+                model.ner_profile_id,
+                model.chunking_profile_id,
+                model.lexical_profile_id,
+                model.embedding_profile_id,
+            )
+            for model in models
+        )
+
+    async def create(self, profile: IngestionProfile) -> None:
+        """Add an immutable ingestion bundle."""
+        self._session.add(
+            IngestionProfileModel(
+                id=profile.ingestion_profile_id,
+                ner_profile_id=profile.ner_profile_id,
+                chunking_profile_id=profile.chunking_profile_id,
+                lexical_profile_id=profile.lexical_profile_id,
+                embedding_profile_id=profile.embedding_profile_id,
+            )
+        )

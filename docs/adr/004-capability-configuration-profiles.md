@@ -162,8 +162,22 @@ foreign key.
 - The platform can run multiple embedding and lexical cohorts during a transition, at the
   cost of extra query embedding/search work until legacy cohorts are retired.
 - Every answer and derived artifact can be traced to exact immutable configuration.
-- Activation requires an administrative/operational control plane, which is planned but
-  not implemented in the current processing slice.
+- Activation uses a private platform-operator CLI with a dedicated database login.
+
+### Operator approval and cohort continuity
+
+An operator uses the private CLI or the separately authenticated Admin Panel to stage a
+draft capability, validate its schema, supported adapter, and runtime credential, and
+create an immutable ingestion or query bundle. Activation
+requires the observed pointer revision and an audit reason; the pointer change and
+actor-attributed audit entry commit together. Tenant API credentials cannot change
+platform profiles.
+
+Query activation retains lexical and embedding read cohorts for every ready index
+generation and the active ingestion profile. Ingestion activation is rejected until
+the active query bundle includes its lexical and embedding cohorts. Operators first
+activate a query bundle containing old and new cohorts, then activate the new ingestion
+bundle. Each query creates a vector using each cohort's own immutable embedding profile.
 
 ## Acceptance criteria
 

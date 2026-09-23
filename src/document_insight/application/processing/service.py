@@ -327,7 +327,7 @@ class ProcessingService:
                     perf_counter() - started_at
                 )
                 logger.warning(
-                    "embedding stage failed",
+                    "Embedding stage failed",
                     extra={
                         "operation": "ingestion",
                         "stage": "embedding",

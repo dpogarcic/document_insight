@@ -7,3 +7,11 @@ class ProcessingProfileUnavailableError(Exception):
 
 class InvalidProcessingProfileError(Exception):
     """A persisted profile cannot be resolved as a supported configuration."""
+
+
+class InvalidProfileProposalError(Exception):
+    """A proposed profile is missing, incompatible, or unsupported."""
+
+
+class ProfileRevisionConflictError(Exception):
+    """The active pointer changed since the operator reviewed it."""

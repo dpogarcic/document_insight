@@ -22,3 +22,9 @@ class QueryProfileRepository(Protocol):
 
     async def get(self, query_profile_id: UUID) -> ResolvedQueryProfile | None:
         """Return one persisted query profile and its enabled read cohorts."""
+
+    async def list_all(self) -> tuple[ResolvedQueryProfile, ...]:
+        """Return query bundles newest first."""
+
+    async def create(self, profile: ResolvedQueryProfile) -> None:
+        """Persist a bundle and its explicit read cohorts."""

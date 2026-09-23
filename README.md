@@ -33,6 +33,8 @@ contract-only.
 
 ## Design documentation
 
+- [Applications and services](docs/application/README.md) - running Compose services,
+  optional tools, local endpoints, and startup jobs.
 - [Architecture](docs/ARCHITECTURE.md) - system diagram, component responsibilities,
   data flow, deployment position, and trade-offs.
 - [ADR 001: Service boundaries](docs/adr/001-service-boundaries.md) - API, service
@@ -64,7 +66,8 @@ uv sync --group dev
 cp .env.example .env
 ```
 
-Set `MISTRAL_API_KEY` and six distinct `DATABASE_*_PASSWORD` values in `.env`.
+Set `MISTRAL_API_KEY` and six distinct runtime `DATABASE_*_PASSWORD` values in `.env`.
+Set a seventh, `DATABASE_PROFILE_OPERATOR_PASSWORD`, when using manual profile approval.
 Replace each matching `DATABASE_*_URL` password with the same value (URL-encode special
 characters). `DATABASE_URL` is the database owner credential used only by migration and
 role provisioning; application services receive restricted login URLs. Then start the
@@ -78,6 +81,42 @@ Compose starts PostgreSQL/pgvector, Redis, MinIO and its bucket initialization, 
 migrations, restricted database role provisioning, the RQ worker, and the public API.
 Only the API is exposed on port `8000`;
 the supporting services remain private to the Compose network.
+
+### Manual configuration-profile approval
+
+For the browser UI, set `DATABASE_PROFILE_OPERATOR_PASSWORD` and its matching
+`DATABASE_PROFILE_OPERATOR_URL`, plus distinct `ADMIN_PANEL_USERNAME` and
+`ADMIN_PANEL_PASSWORD` values in `.env`. Start it with:
+
+```bash
+docker compose --profile admin up --build -d admin-panel
+```
+
+Open [Document Insight Admin](http://127.0.0.1:8001/) and sign in with those admin
+panel credentials. The Compose port binds to localhost only. The panel supports reviewing
+profiles, creating draft capabilities, validating them, assembling ingestion and query
+policies, and activating bundles with an audit reason. It keeps older read cohorts
+selected when creating a new query policy. For production, put the panel behind an
+internal TLS ingress and set `ADMIN_PANEL_SECURE_COOKIES=true`.
+
+The operator command remains available for scripted or emergency use:
+
+The private `profile-operator` service uses `DATABASE_PROFILE_OPERATOR_URL`, separate
+from the public API and worker credentials. Put local JSON configuration files in a
+`profiles/` directory. Run commands with
+`docker compose --profile operator run --rm profile-operator ...`.
+
+1. `create-capability --capability embedding --name mistral-embed-v2 --config-file /app/profiles/embedding-v2.json` stages a draft and prints its ID.
+2. `validate-capability PROFILE_ID` approves the draft after schema, adapter, and runtime checks.
+3. `create-ingestion --ner ID --chunking ID --lexical ID --embedding ID` stages a bundle, reusing approved IDs for unchanged capabilities.
+4. `create-query --lexical OLD_ID NEW_ID --embedding OLD_ID NEW_ID --reranker ID --generation ID --retrieval-file /app/profiles/retrieval.json` stages a query bundle that reads both old and new indexes.
+5. Review the proposed policy with `show-capability PROFILE_ID`, `show-query PROFILE_ID`, and `show-ingestion PROFILE_ID`. `show-active` prints the active IDs and revisions. Activate the query bundle with `activate --kind query --profile-id ID --expected-revision N --actor-id OPERATOR_UUID --reason "enable both cohorts"`. Then activate the ingestion bundle with its own expected revision.
+
+Keep runtime credentials for every provider used by an active query cohort. This
+deployment supports Mistral embedding, reranking, and generation; another provider
+requires its adapter and credential before validation. Existing jobs retain their
+persisted ingestion profile. Query activation refuses to omit cohorts referenced by
+ready index generations, so older indexed documents remain searchable.
 
 ### Local observability
 
@@ -230,8 +269,9 @@ docker compose --profile test rm -sf database-test redis-test
 ```
 
 The test database initializes a restricted runtime role automatically. Alembic uses
-the separate test owner role. The role bootstrap step enables six additional restricted
-login roles using passwords from `.env`. The RLS tests check role capabilities, direct
+the separate test owner role. The role bootstrap step enables six runtime logins and,
+when configured, the private profile-operator login using passwords from `.env`.
+The RLS tests check role capabilities, direct
 SQL reads and writes, department revocation, editor assignment timing, ranked retrieval,
 and an authenticated `/query` response. The disposable Redis test checks that concurrent
 requests share one per-user quota. These checks skip when their respective test URLs are

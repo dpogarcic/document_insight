@@ -70,6 +70,16 @@ class EmbeddingConfiguration(BaseModel):
     batch_size: Annotated[int, Field(ge=1, le=512)]
 
 
+class LexicalConfiguration(BaseModel):
+    """Temporary PostgreSQL full-text implementation supported by this deployment."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    implementation: str
+    configuration: str
+    implementation_revision: str
+
+
 class RerankingConfiguration(BaseModel):
     """Non-secret settings for a profile-selected document-query ranker."""
 

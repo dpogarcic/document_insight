@@ -1,5 +1,6 @@
 """SQLAlchemy repository for immutable configuration snapshot reads."""
 
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -31,3 +32,36 @@ class SqlAlchemyConfigurationSnapshotRepository(ConfigurationSnapshotRepository)
             schema_version=model.schema_version,
             configuration=model.configuration_json,
         )
+
+    async def get_by_fingerprint(
+        self, capability: str, fingerprint: str
+    ) -> ConfigurationSnapshot | None:
+        """Return an existing snapshot with the same canonical content."""
+        model = await self._session.scalar(
+            select(ConfigurationSnapshotModel).where(
+                ConfigurationSnapshotModel.capability == capability,
+                ConfigurationSnapshotModel.fingerprint == fingerprint,
+            )
+        )
+        return (
+            None
+            if model is None
+            else ConfigurationSnapshot(
+                model.id, model.capability, model.schema_version, model.configuration_json
+            )
+        )
+
+    async def create(
+        self, snapshot_id: UUID, capability: str, fingerprint: str, configuration: dict[str, Any]
+    ) -> None:
+        """Add one schema-v1 immutable snapshot."""
+        self._session.add(
+            ConfigurationSnapshotModel(
+                id=snapshot_id,
+                capability=capability,
+                schema_version=1,
+                fingerprint=fingerprint,
+                configuration_json=configuration,
+            )
+        )
+        await self._session.flush()

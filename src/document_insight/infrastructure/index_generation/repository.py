@@ -76,3 +76,13 @@ class SqlAlchemyIndexGenerationRepository(IndexGenerationRepository):
             .where(IndexGenerationModel.id == index_generation_id)
             .values(status="ready")
         )
+
+    async def referenced_ingestion_profile_ids(self) -> tuple[UUID, ...]:
+        """List distinct ready generation profiles, including older document versions."""
+        return tuple(
+            await self._session.scalars(
+                select(IndexGenerationModel.ingestion_profile_id)
+                .where(IndexGenerationModel.status == "ready")
+                .distinct()
+            )
+        )

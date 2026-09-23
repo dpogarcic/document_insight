@@ -20,3 +20,13 @@ class ConfigurationSnapshotRepository(Protocol):
 
     async def get(self, snapshot_id: UUID) -> ConfigurationSnapshot | None:
         """Return one immutable snapshot by ID."""
+
+    async def get_by_fingerprint(
+        self, capability: str, fingerprint: str
+    ) -> ConfigurationSnapshot | None:
+        """Find an identical existing snapshot."""
+
+    async def create(
+        self, snapshot_id: UUID, capability: str, fingerprint: str, configuration: dict[str, Any]
+    ) -> None:
+        """Persist a canonical non-secret snapshot."""
