@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -20,7 +20,11 @@ from document_insight.infrastructure.active_profile.model import ActiveProfileMo
 from document_insight.infrastructure.capability_profile.model import CapabilityProfileModel
 from document_insight.infrastructure.configuration_snapshot.model import ConfigurationSnapshotModel
 from document_insight.infrastructure.database.base import Base
-from document_insight.infrastructure.database.session import get_db_session
+from document_insight.infrastructure.database.session import (
+    get_auth_db_session,
+    get_db_session,
+    get_write_db_session,
+)
 from document_insight.infrastructure.department.model import DepartmentModel
 from document_insight.infrastructure.document.model import DocumentModel
 from document_insight.infrastructure.document_department.model import DocumentDepartmentModel
@@ -189,6 +193,8 @@ async def ingest_context() -> AsyncIterator[IngestContext]:
             yield session
 
     application.dependency_overrides[get_db_session] = override_db_session
+    application.dependency_overrides[get_write_db_session] = override_db_session
+    application.dependency_overrides[get_auth_db_session] = override_db_session
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_object_storage] = lambda: storage
     application.dependency_overrides[get_processing_queue] = lambda: processing_queue
@@ -258,6 +264,55 @@ async def create_user_token(
                 email=f"{role.value}-{user_id}@example.com",
                 display_name=role.value,
                 role=role,
+                password_hash="unused-in-ingestion-test",
+            )
+        )
+        .value
+    )
+
+
+async def create_other_tenant_token(context: IngestContext) -> str:
+    """Create a valid administrator token for a different tenant."""
+    tenant_id = uuid4()
+    department_id = uuid4()
+    user_id = uuid4()
+    async with context.session_factory.begin() as session:
+        session.add(TenantModel(id=tenant_id, name="Other Tenant"))
+        session.add(DepartmentModel(id=department_id, tenant_id=tenant_id, name="General"))
+        session.add(
+            UserModel(
+                id=user_id,
+                tenant_id=tenant_id,
+                email=f"other-admin-{user_id}@example.com",
+                display_name="Other Tenant Admin",
+                password_hash="unused-in-ingestion-test",
+                role=UserRole.TENANT_ADMIN.value,
+            )
+        )
+        session.add(
+            UserDepartmentModel(
+                user_id=user_id,
+                department_id=department_id,
+                tenant_id=tenant_id,
+            )
+        )
+
+    return (
+        JwtTokenIssuer(
+            secret_key=context.settings.jwt_secret_key,
+            algorithm=context.settings.jwt_algorithm,
+            issuer=context.settings.jwt_issuer,
+            audience=context.settings.jwt_audience,
+            expire_minutes=context.settings.jwt_access_token_expire_minutes,
+        )
+        .issue(
+            UserCredentials(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                department_ids=(department_id,),
+                email=f"other-admin-{user_id}@example.com",
+                display_name="Other Tenant Admin",
+                role=UserRole.TENANT_ADMIN,
                 password_hash="unused-in-ingestion-test",
             )
         )
@@ -716,6 +771,71 @@ async def test_get_job_hides_jobs_outside_department_scope(
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "job_not_found"
+
+
+@pytest.mark.anyio
+async def test_other_tenant_cannot_list_or_read_or_replace_document(
+    ingest_context: IngestContext,
+) -> None:
+    """A valid administrator token cannot cross the tenant boundary by guessing IDs."""
+    ingestion = await ingest_context.client.post(
+        "/ingest",
+        files={"file": ("private.pdf", b"%PDF-1.7\n", "application/pdf")},
+    )
+    assert ingestion.status_code == 202
+    foreign_token = await create_other_tenant_token(ingest_context)
+    headers = {"Authorization": f"Bearer {foreign_token}"}
+
+    library = await ingest_context.client.get("/documents", headers=headers)
+    job = await ingest_context.client.get(f"/jobs/{ingestion.json()['job_id']}", headers=headers)
+    replacement = await ingest_context.client.post(
+        "/ingest",
+        headers=headers,
+        data={"document_id": ingestion.json()["document_id"]},
+        files={"file": ("replacement.pdf", b"%PDF-1.7\n", "application/pdf")},
+    )
+
+    assert library.status_code == 200
+    assert (library.json()["documents"], job.status_code) == ([], 404)
+    assert replacement.status_code == 404
+    assert len(ingest_context.storage.objects) == 1
+
+
+@pytest.mark.anyio
+async def test_revoked_department_membership_stops_document_and_job_access(
+    ingest_context: IngestContext,
+) -> None:
+    """A previously issued token must not preserve access after membership revocation."""
+    ingestion = await ingest_context.client.post(
+        "/ingest",
+        files={"file": ("private.pdf", b"%PDF-1.7\n", "application/pdf")},
+    )
+    assert ingestion.status_code == 202
+    viewer_token = await create_user_token(
+        ingest_context,
+        UserRole.VIEWER,
+        (ingest_context.general_department_id,),
+    )
+    headers = {"Authorization": f"Bearer {viewer_token}"}
+    before = await ingest_context.client.get(f"/jobs/{ingestion.json()['job_id']}", headers=headers)
+    assert before.status_code == 200
+
+    async with ingest_context.session_factory.begin() as session:
+        await session.execute(
+            delete(UserDepartmentModel).where(
+                UserDepartmentModel.tenant_id == ingest_context.tenant_id,
+                UserDepartmentModel.department_id == ingest_context.general_department_id,
+                UserDepartmentModel.user_id.in_(
+                    select(UserModel.id).where(UserModel.role == UserRole.VIEWER.value)
+                ),
+            )
+        )
+
+    library = await ingest_context.client.get("/documents", headers=headers)
+    job = await ingest_context.client.get(f"/jobs/{ingestion.json()['job_id']}", headers=headers)
+
+    assert library.status_code == 401
+    assert job.status_code == 401
 
 
 @pytest.mark.anyio

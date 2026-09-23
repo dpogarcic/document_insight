@@ -5,7 +5,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 
-from document_insight.api.dependencies import get_current_user, get_document_library_service
+from document_insight.api.dependencies import (
+    get_current_user,
+    get_document_activation_service,
+    get_document_library_service,
+)
 from document_insight.api.errors import AUTH_ERROR_RESPONSES
 from document_insight.api.schemas.documents import (
     ActivatedDocumentVersionDTO,
@@ -21,6 +25,9 @@ from document_insight.application.documents.service import DocumentLibraryServic
 router = APIRouter(prefix="/documents", tags=["documents"])
 DocumentLibraryServiceDependency = Annotated[
     DocumentLibraryService, Depends(get_document_library_service)
+]
+DocumentActivationServiceDependency = Annotated[
+    DocumentLibraryService, Depends(get_document_activation_service)
 ]
 CurrentUser = Annotated[AuthorizationContext, Depends(get_current_user)]
 
@@ -81,7 +88,7 @@ async def activate_document_version(
     document_id: UUID,
     request: ActivateDocumentVersionRequest,
     current_user: CurrentUser,
-    service: DocumentLibraryServiceDependency,
+    service: DocumentActivationServiceDependency,
 ) -> ActivatedDocumentVersionDTO:
     """Atomically activate one ready version; this never starts or alters processing."""
     await service.activate_version(document_id, request.document_version_id, current_user)

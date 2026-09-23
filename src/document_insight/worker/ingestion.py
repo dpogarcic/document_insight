@@ -73,7 +73,8 @@ async def _process(job_id: UUID) -> None:
         settings.s3_bucket_name,
         settings.s3_region,
     )
-    async with get_session_factory()() as session:
+    async with get_session_factory("worker")() as session:
+        session.info["rls_job_id"] = job_id
         jobs_repo = SqlAlchemyJobRepository(session)
         queue = RqProcessingQueue(
             settings.redis_url,

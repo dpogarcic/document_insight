@@ -64,14 +64,19 @@ uv sync --group dev
 cp .env.example .env
 ```
 
-Set `MISTRAL_API_KEY` in `.env`, then start the complete local stack with one command:
+Set `MISTRAL_API_KEY` and six distinct `DATABASE_*_PASSWORD` values in `.env`.
+Replace each matching `DATABASE_*_URL` password with the same value (URL-encode special
+characters). `DATABASE_URL` is the database owner credential used only by migration and
+role provisioning; application services receive restricted login URLs. Then start the
+complete local stack with one command:
 
 ```bash
 docker compose up --build
 ```
 
 Compose starts PostgreSQL/pgvector, Redis, MinIO and its bucket initialization, database
-migrations, the RQ worker, and the public API. Only the API is exposed on port `8000`;
+migrations, restricted database role provisioning, the RQ worker, and the public API.
+Only the API is exposed on port `8000`;
 the supporting services remain private to the Compose network.
 
 ### Local observability
@@ -197,6 +202,31 @@ uv run ruff check src tests migrations
 uv run mypy
 uv run pytest
 ```
+
+### Disposable PostgreSQL security tests
+
+Set `TEST_DATABASE_OWNER_PASSWORD` and `TEST_DATABASE_RUNTIME_PASSWORD` in `.env`,
+and set `TEST_DATABASE_RUNTIME_URL` to
+`postgresql+asyncpg://document_insight_test_runtime:<runtime-password>@127.0.0.1:5433/document_insight_test`.
+Use URL-safe local test passwords, and keep the URL password identical to
+`TEST_DATABASE_RUNTIME_PASSWORD`. The test database runs on port 5433 with its data
+on a temporary filesystem; stopping its container removes the data. It never uses
+the development database on port 5432. Remove the container after testing to discard
+its temporary data.
+
+```bash
+docker compose --profile test up -d database-test
+docker compose --profile test run --build --rm test-migrate
+docker compose --profile test run --build --rm test-bootstrap-roles
+uv run pytest -q -o addopts='' tests/integration
+docker compose --profile test rm -sf database-test
+```
+
+The test database initializes a restricted runtime role automatically. Alembic uses
+the separate test owner role. The role bootstrap step enables six additional restricted
+login roles using passwords from `.env`. The RLS tests check role capabilities, direct
+SQL reads and writes, department revocation, editor assignment timing, ranked retrieval,
+and an authenticated `/query` response. Tests skip when the test URL is unset.
 
 ## First implementation scope
 

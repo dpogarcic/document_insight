@@ -6,7 +6,11 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=${DATABASE_URL:?Set DATABASE_URL in .env}
+      - DATABASE_URL=${DATABASE_READ_URL:?Set DATABASE_READ_URL in .env}
+      - DATABASE_READ_URL=${DATABASE_READ_URL:?Set DATABASE_READ_URL in .env}
+      - DATABASE_WRITE_URL=${DATABASE_WRITE_URL:?Set DATABASE_WRITE_URL in .env}
+      - DATABASE_AUTH_URL=${DATABASE_AUTH_URL:?Set DATABASE_AUTH_URL in .env}
+      - DATABASE_MONITOR_URL=${DATABASE_MONITOR_URL:?Set DATABASE_MONITOR_URL in .env}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY}
       - MISTRAL_API_KEY=${MISTRAL_API_KEY:?Set MISTRAL_API_KEY in .env}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:?Set S3_ENDPOINT_URL in .env}
@@ -26,6 +30,8 @@ services:
       object-storage-init:
         condition: service_completed_successfully
       migrate:
+        condition: service_completed_successfully
+      bootstrap-roles:
         condition: service_completed_successfully
       prometheus-multiproc-init:
         condition: service_completed_successfully
@@ -51,6 +57,57 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # Disposable PostgreSQL instance for database isolation tests only.
+  database-test:
+    image: pgvector/pgvector:pg17
+    profiles: [test]
+    ports:
+      - "127.0.0.1:5433:5432"
+    environment:
+      POSTGRES_USER: document_insight_test_owner
+      POSTGRES_PASSWORD: ${TEST_DATABASE_OWNER_PASSWORD:-}
+      POSTGRES_DB: document_insight_test
+      TEST_DATABASE_RUNTIME_PASSWORD: ${TEST_DATABASE_RUNTIME_PASSWORD:-}
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./tests/integration/db_init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U document_insight_test_owner -d document_insight_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  test-migrate:
+    build: .
+    profiles: [test]
+    command: uv run --no-sync alembic upgrade head
+    environment:
+      DATABASE_URL: postgresql+asyncpg://document_insight_test_owner:${TEST_DATABASE_OWNER_PASSWORD:-}@database-test:5432/document_insight_test
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+    depends_on:
+      database-test:
+        condition: service_healthy
+    restart: "no"
+
+  test-bootstrap-roles:
+    build: .
+    profiles: [test]
+    command: uv run --no-sync python -m document_insight.infrastructure.database.bootstrap_roles
+    environment:
+      DATABASE_URL: postgresql+asyncpg://document_insight_test_owner:${TEST_DATABASE_OWNER_PASSWORD:-}@database-test:5432/document_insight_test
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      DATABASE_READ_PASSWORD: ${DATABASE_READ_PASSWORD:-}
+      DATABASE_WRITE_PASSWORD: ${DATABASE_WRITE_PASSWORD:-}
+      DATABASE_AUTH_PASSWORD: ${DATABASE_AUTH_PASSWORD:-}
+      DATABASE_WORKER_PASSWORD: ${DATABASE_WORKER_PASSWORD:-}
+      DATABASE_RECONCILER_PASSWORD: ${DATABASE_RECONCILER_PASSWORD:-}
+      DATABASE_MONITOR_PASSWORD: ${DATABASE_MONITOR_PASSWORD:-}
+    depends_on:
+      database-test:
+        condition: service_healthy
+    restart: "no"
 
   # Redis service
   redis:
@@ -100,6 +157,23 @@ services:
         condition: service_healthy
     restart: "no"
 
+  bootstrap-roles:
+    build: .
+    image: document-insight-app:latest
+    command: uv run --no-sync python -m document_insight.infrastructure.database.bootstrap_roles
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      DATABASE_READ_PASSWORD: ${DATABASE_READ_PASSWORD:?Set DATABASE_READ_PASSWORD in .env}
+      DATABASE_WRITE_PASSWORD: ${DATABASE_WRITE_PASSWORD:?Set DATABASE_WRITE_PASSWORD in .env}
+      DATABASE_AUTH_PASSWORD: ${DATABASE_AUTH_PASSWORD:?Set DATABASE_AUTH_PASSWORD in .env}
+      DATABASE_WORKER_PASSWORD: ${DATABASE_WORKER_PASSWORD:?Set DATABASE_WORKER_PASSWORD in .env}
+      DATABASE_RECONCILER_PASSWORD: ${DATABASE_RECONCILER_PASSWORD:?Set DATABASE_RECONCILER_PASSWORD in .env}
+      DATABASE_MONITOR_PASSWORD: ${DATABASE_MONITOR_PASSWORD:?Set DATABASE_MONITOR_PASSWORD in .env}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
   prometheus-multiproc-init:
     image: busybox:1.37.0
     command: ["sh", "-c", "rm -f /run/prometheus-multiproc/*.db"]
@@ -116,7 +190,8 @@ services:
       --worker-class document_insight.worker.monitored.MonitoredWorker
       --url redis://redis:6379/0 ingestion
     environment:
-      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      DATABASE_URL: ${DATABASE_WORKER_URL:?Set DATABASE_WORKER_URL in .env}
+      DATABASE_WORKER_URL: ${DATABASE_WORKER_URL:?Set DATABASE_WORKER_URL in .env}
       REDIS_URL: ${REDIS_URL:?Set REDIS_URL in .env}
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:?Set S3_ENDPOINT_URL in .env}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY in .env}
@@ -137,6 +212,8 @@ services:
         condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
+      bootstrap-roles:
+        condition: service_completed_successfully
       prometheus-multiproc-init:
         condition: service_completed_successfully
     volumes:
@@ -148,7 +225,8 @@ services:
     image: document-insight-worker:latest
     command: uv run --no-sync python -m document_insight.worker.reconciler
     environment:
-      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      DATABASE_URL: ${DATABASE_RECONCILER_URL:?Set DATABASE_RECONCILER_URL in .env}
+      DATABASE_RECONCILER_URL: ${DATABASE_RECONCILER_URL:?Set DATABASE_RECONCILER_URL in .env}
       REDIS_URL: ${REDIS_URL:?Set REDIS_URL in .env}
       RQ_INGESTION_QUEUE_NAME: ingestion
       JOB_RECONCILIATION_INTERVAL_SECONDS: ${JOB_RECONCILIATION_INTERVAL_SECONDS:-60}
@@ -160,6 +238,8 @@ services:
       redis:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      bootstrap-roles:
         condition: service_completed_successfully
       prometheus-multiproc-init:
         condition: service_completed_successfully

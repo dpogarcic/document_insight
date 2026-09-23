@@ -89,6 +89,11 @@ User * --- * Department (through user_departments)
 ```
 
 The database enforces that every user-department membership belongs to one tenant.
+The API refreshes role and department membership from PostgreSQL for each authenticated
+request. Restricted database logins separate read-only query traffic, ingest and activation
+writes, registration/login, job processing, reconciliation, and monitoring. Transaction-local
+actor or job identity drives forced RLS on tenant-owned tables; missing scope fails closed.
+The database owner credential is used only for migrations and role provisioning.
 Document department membership uses the separate many-to-many model described in ADR 003.
 
 ### Ingest and version replacement

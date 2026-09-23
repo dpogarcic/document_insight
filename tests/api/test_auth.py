@@ -14,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 from document_insight.api.app import create_app
 from document_insight.config import Settings, get_settings
 from document_insight.infrastructure.database.base import Base
-from document_insight.infrastructure.database.session import get_db_session
+from document_insight.infrastructure.database.session import get_auth_db_session, get_db_session
 from document_insight.infrastructure.department.model import DepartmentModel
 from document_insight.infrastructure.tenant.model import TenantModel
 from document_insight.infrastructure.user.model import UserModel
@@ -58,6 +58,7 @@ async def auth_client() -> AsyncIterator[tuple[AsyncClient, async_sessionmaker[A
             yield session
 
     application.dependency_overrides[get_db_session] = override_db_session
+    application.dependency_overrides[get_auth_db_session] = override_db_session
     application.dependency_overrides[get_settings] = lambda: settings
 
     transport = ASGITransport(app=application)

@@ -19,6 +19,18 @@ class Settings(BaseSettings):
     database_url: str = (
         "postgresql+asyncpg://document_insight:document_insight@localhost:5432/document_insight"
     )
+    database_read_url: str | None = None
+    database_write_url: str | None = None
+    database_auth_url: str | None = None
+    database_worker_url: str | None = None
+    database_reconciler_url: str | None = None
+    database_monitor_url: str | None = None
+    database_read_password: SecretStr | None = None
+    database_write_password: SecretStr | None = None
+    database_auth_password: SecretStr | None = None
+    database_worker_password: SecretStr | None = None
+    database_reconciler_password: SecretStr | None = None
+    database_monitor_password: SecretStr | None = None
     jwt_secret_key: SecretStr
     jwt_algorithm: Literal["HS256"] = "HS256"
     jwt_issuer: str = "document-insight"

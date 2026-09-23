@@ -50,7 +50,7 @@ def create_app() -> FastAPI:
     async def metrics_endpoint(request: Request) -> Response:
         """Serve authenticated metrics to the private monitoring collector."""
         authorize_metrics_request(request, settings)
-        async with get_session_factory()() as session:
+        async with get_session_factory("monitor")() as session:
             snapshot = await ProcessingJobMonitoringService(
                 SqlAlchemyJobRepository(session)
             ).snapshot(datetime.now(UTC))

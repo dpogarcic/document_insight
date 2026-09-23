@@ -27,7 +27,7 @@ async def run_reconciler() -> None:
     settings = get_settings()
     while True:
         try:
-            async with get_session_factory()() as session:
+            async with get_session_factory("reconciler")() as session:
                 await ProcessingJobReconciler(
                     SqlAlchemyJobRepository(session),
                     SqlAlchemyDocumentVersionRepository(session),
