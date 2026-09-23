@@ -35,6 +35,23 @@ class ProfileCatalog:
     active_ingestion: ActiveProfile | None
     active_query: ActiveProfile | None
 
+    @property
+    def selectable_queries(self) -> tuple[ResolvedQueryProfile, ...]:
+        """Query profiles whose reranker and generation capabilities are not retired.
+
+        A retired capability profile's configuration no longer satisfies the current
+        provider schema (for example, a required field added after it was seeded), so
+        resolving it always fails. Offering it as a pickable candidate would let an
+        operator launch a run that is guaranteed to error.
+        """
+        retired = {item.profile_id for item in self.capabilities if item.status == "retired"}
+        return tuple(
+            item
+            for item in self.queries
+            if item.reranker_profile_id not in retired
+            and item.generation_profile_id not in retired
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class CapabilityDetail:
@@ -98,3 +115,7 @@ class ProfileCatalogService:
             return None
         snapshot = await self._snapshots.get(profile.retrieval_snapshot_id)
         return None if snapshot is None else QueryDetail(profile, snapshot.configuration)
+
+    async def evaluation_ingestion(self, tenant_id: UUID) -> ActiveProfile | None:
+        """Read the isolated test-tenant ingestion selection for the panel."""
+        return await self._active.get(f"evaluation:{tenant_id}", "ingestion")

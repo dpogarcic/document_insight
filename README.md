@@ -5,18 +5,30 @@ content, and answering questions over authorized document evidence.
 
 ## Project status
 
-**Planning complete; authentication and ingestion implementation in progress.**
+**Core vertical slice implemented and tested; CI/CD pipeline and load-test benchmark are not yet added.**
 
-The FastAPI application, typed request/response models, endpoint validation, and OpenAPI
-contract are implemented. Local registration and login are connected to PostgreSQL with
-Argon2 password hashing and short-lived signed JWT access tokens. Authenticated ingestion
-currently validates PDF, PNG, and JPEG uploads, stores immutable originals in local MinIO,
-and atomically persists document/version metadata with a durable processing job. The job
-is published to Redis/RQ. The worker extracts PDF/image text, detects English or Croatian,
-enriches document metadata with NER, and stores citation-ready chunks with a PostgreSQL
-full-text lexical index. It also creates profile-bound embeddings through Mistral and marks
-completed versions ready for later administrator activation. Query remains
-contract-only.
+Authentication, ingestion, processing, and query are implemented end to end. Local
+registration and login are connected to PostgreSQL with Argon2 password hashing and
+short-lived signed JWT access tokens. Authenticated ingestion validates PDF, PNG, and JPEG
+uploads, stores immutable originals in local MinIO, and atomically persists document/version
+metadata with a durable processing job published to Redis/RQ. The worker extracts PDF/image
+text, detects English or Croatian, enriches document metadata with NER, stores citation-ready
+chunks with a PostgreSQL full-text lexical index, and creates profile-bound embeddings
+through Mistral, marking completed versions ready for later tenant-admin activation.
+`POST /query` performs authorized hybrid retrieval (lexical + vector, fused with RRF),
+reranking, and evidence-grounded generation, returning an answer, evidence-confidence score,
+citations, and detected entities; per-user rate limiting and PostgreSQL row-level security
+enforce tenant/department isolation before every read. A separately authenticated Admin
+Panel manages capability/ingestion/query profile activation and a full evaluation-suite
+workflow (labelled test cases, baseline-vs-candidate runs, Recall@K/Precision@K/citation
+scoring, manual gate review) gating platform activations. A local Prometheus/Grafana/Loki
+stack provides metrics, per-stage duration timing, and dashboards, with a correlation ID
+propagated through logs across the API, queue, and worker boundaries — not yet a formal
+distributed-tracing backend (see ADR 005).
+
+Not yet done: the CI/CD pipeline (lint/test/security-scan on push, image build/push on
+main) and the `benchmark/` load-test script and results summary are both required
+deliverables per `Tech_Assignment.pdf` and are still outstanding.
 
 ## Planned capabilities
 
@@ -34,7 +46,7 @@ contract-only.
 ## Design documentation
 
 - [Applications and services](docs/application/README.md) - running Compose services,
-  optional tools, local endpoints, and startup jobs.
+  optional tools, local endpoints, startup jobs, and the [tenant evaluation workflow](docs/application/README.md#evaluation-suites-and-manual-quality-gate).
 - [Architecture](docs/ARCHITECTURE.md) - system diagram, component responsibilities,
   data flow, deployment position, and trade-offs.
 - [ADR 001: Service boundaries](docs/adr/001-service-boundaries.md) - API, service
@@ -44,18 +56,23 @@ contract-only.
 - [ADR 003: Tenant isolation and security](docs/adr/003-tenant-isolation.md) - tenants,
   departments, roles, authorization, encryption, and auditing.
 - [ADR 004: Capability configuration profiles](docs/adr/004-capability-configuration-profiles.md) - immutable AI configuration, explicit activation, and compatible retrieval across profile generations.
-
-Reranking and generation instructions are stored in fingerprinted capability snapshots.
-Migration `20260922_0011` creates prompt-bearing replacements and activates a new query
-profile only when the platform still uses the original seeded query profile. Installations
-with a custom active query profile must create and activate prompt-bearing capability and
-query profiles before running queries with this application version; an old snapshot with
-only `prompt_revision` is rejected at profile resolution.
 - [ADR 005: Observability](docs/adr/005-observability.md) - privacy-safe metrics, logs,
   dashboards, local Compose monitoring, and production operational controls.
+- [ADR 006: Evaluation suite admin dashboard and run lifecycle](docs/adr/006-evaluation-admin-dashboard.md) -
+  suite/run data model, evaluation execution and recovery, gate review, and capability
+  profile retirement.
 - [Code quality standards](docs/CODE_QUALITY.md) - typing, testing, coverage,
   documentation, security, and merge expectations.
 - [AI Tech Lead assignment](Tech_Assignment.pdf) - original project brief.
+
+Reranking and generation instructions are stored in fingerprinted capability snapshots.
+Migration `20260922_0011` creates prompt-bearing replacements and activates a new query
+profile only when the platform still uses the original seeded query profile. Migration
+`20260923_0020` retires that original pre-`system_prompt` reranker/generator pair outright
+(see ADR 006), so it can no longer be selected as an evaluation candidate. Installations
+with a custom active query profile must create and activate prompt-bearing capability and
+query profiles before running queries with this application version; an old snapshot with
+only `prompt_revision` is rejected at profile resolution.
 
 ## Local setup
 
@@ -67,29 +84,32 @@ cp .env.example .env
 ```
 
 Set `MISTRAL_API_KEY` and six distinct runtime `DATABASE_*_PASSWORD` values in `.env`.
-Set a seventh, `DATABASE_PROFILE_OPERATOR_PASSWORD`, when using manual profile approval.
-Replace each matching `DATABASE_*_URL` password with the same value (URL-encode special
-characters). `DATABASE_URL` is the database owner credential used only by migration and
-role provisioning; application services receive restricted login URLs. Then start the
-complete local stack with one command:
+Set a seventh, `DATABASE_PROFILE_OPERATOR_PASSWORD`, for the Admin Panel and manual
+profile approval, which start by default. Replace each matching `DATABASE_*_URL`
+password with the same value (URL-encode special characters). `DATABASE_URL` is the
+database owner credential used only by migration and role provisioning; application
+services receive restricted login URLs. Then start the complete local stack, including
+the Admin Panel, evaluation services, and local observability, with one command:
 
 ```bash
 docker compose up --build
 ```
 
 Compose starts PostgreSQL/pgvector, Redis, MinIO and its bucket initialization, database
-migrations, restricted database role provisioning, the RQ worker, and the public API.
-Only the API is exposed on port `8000`;
-the supporting services remain private to the Compose network.
+migrations, restricted database role provisioning, the RQ worker, the public API, the
+Admin Panel, evaluation workers, and the local observability stack (Prometheus, cAdvisor,
+Loki, Grafana Alloy, and Grafana). Nothing is gated behind a Compose `--profile` flag.
+Only the API, Admin Panel, and Grafana are exposed on host ports (`8000`, `127.0.0.1:8001`,
+and `127.0.0.1:3001`); the supporting services remain private to the Compose network.
 
 ### Manual configuration-profile approval
 
 For the browser UI, set `DATABASE_PROFILE_OPERATOR_PASSWORD` and its matching
 `DATABASE_PROFILE_OPERATOR_URL`, plus distinct `ADMIN_PANEL_USERNAME` and
-`ADMIN_PANEL_PASSWORD` values in `.env`. Start it with:
+`ADMIN_PANEL_PASSWORD` values in `.env`. It starts with the rest of the stack:
 
 ```bash
-docker compose --profile admin up --build -d admin-panel
+docker compose up --build
 ```
 
 Open [Document Insight Admin](http://127.0.0.1:8001/) and sign in with those admin
@@ -103,8 +123,9 @@ The operator command remains available for scripted or emergency use:
 
 The private `profile-operator` service uses `DATABASE_PROFILE_OPERATOR_URL`, separate
 from the public API and worker credentials. Put local JSON configuration files in a
-`profiles/` directory. Run commands with
-`docker compose --profile operator run --rm profile-operator ...`.
+`profiles/` directory. `docker compose up` also starts this service, but only runs its
+default `--help` command and exits; run a specific command with
+`docker compose run --rm profile-operator ...`.
 
 1. `create-capability --capability embedding --name mistral-embed-v2 --config-file /app/profiles/embedding-v2.json` stages a draft and prints its ID.
 2. `validate-capability PROFILE_ID` approves the draft after schema, adapter, and runtime checks.
@@ -120,10 +141,10 @@ ready index generations, so older indexed documents remain searchable.
 
 ### Local observability
 
-Start the optional local monitoring profile with:
+The local monitoring stack starts with the rest of the services:
 
 ```bash
-docker compose --profile observability up --build
+docker compose up --build
 ```
 
 This starts Prometheus, cAdvisor, Loki, Grafana Alloy, and Grafana. Grafana is available
@@ -146,8 +167,8 @@ On Docker Desktop, cAdvisor may expose only an aggregate host cgroup rather than
 container cgroups. In that case the memory panel displays the available aggregate instead of
 per-service memory.
 
-Set strong `METRICS_BEARER_TOKEN` and `GRAFANA_ADMIN_PASSWORD` values before enabling the
-profile. Grafana provisions and evaluates the alert rules against Prometheus. No external
+Set strong `METRICS_BEARER_TOKEN` and `GRAFANA_ADMIN_PASSWORD` values before starting the
+stack. Grafana provisions and evaluates the alert rules against Prometheus. No external
 Alertmanager, contact point, or custom notification policy is configured by this project;
 notification delivery must be configured and tested in Grafana before production use.
 Prometheus uses the first only inside the Compose network to scrape the private
@@ -256,17 +277,19 @@ and set `TEST_DATABASE_RUNTIME_URL` to
 Use URL-safe local test passwords, and keep the URL password identical to
 `TEST_DATABASE_RUNTIME_PASSWORD`. The test database runs on port 5433 with its data
 on a temporary filesystem; stopping its container removes the data. It never uses
-the development database on port 5432. Remove the container after testing to discard
-its temporary data.
+the development database on port 5432.
+
+`database-test`, `test-migrate`, `test-bootstrap-roles`, and `redis-test` start
+automatically with `docker compose up --build` alongside the rest of the stack, so once
+it's running you only need:
 
 ```bash
-docker compose --profile test up -d database-test
-docker compose --profile test run --build --rm test-migrate
-docker compose --profile test run --build --rm test-bootstrap-roles
-docker compose --profile test up -d redis-test
 uv run pytest -q -o addopts='' tests/integration
-docker compose --profile test rm -sf database-test redis-test
+docker compose rm -sf database-test redis-test
 ```
+
+The last command discards the temporary test data; it is optional since the tmpfs is
+also cleared on container removal.
 
 The test database initializes a restricted runtime role automatically. Alembic uses
 the separate test owner role. The role bootstrap step enables six runtime logins and,

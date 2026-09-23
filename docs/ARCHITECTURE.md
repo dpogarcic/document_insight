@@ -30,6 +30,14 @@ flowchart LR
     API --> R[Retrieval and AI provider layer]
     R --> DB
     R --> M[Configured model providers]
+    OP[Platform operator] -->|HTTPS, loopback only| AP[Admin Panel]
+    AP -->|profiles, suites, runs| DB
+    AP -->|enqueue evaluation run| EQ[(Redis / RQ evaluation queue)]
+    EQ --> EW[Evaluation worker]
+    ERC[Evaluation reconciler] -->|republish durable runs| EQ
+    ERC --> DB
+    EW -->|authorized query path| R
+    EW --> DB
 ```
 
 ## Components and responsibilities
@@ -45,6 +53,8 @@ flowchart LR
 | Job reconciler | Periodically recovers durable jobs that Redis did not receive, stale transient processing jobs, and retryable transient failures. It never retries permanent failures or exhausted jobs. |
 | Observability stack | Prometheus scrapes authenticated API and cAdvisor metrics; Grafana Alloy collects Docker logs into Loki; Grafana provides the authenticated UI. These services are private except for an authenticated Grafana ingress. |
 | Retrieval and AI provider layer | Selects explicit providers and implements authorized hybrid retrieval, reranking, evidence-grounded generation, and citations. |
+| Admin Panel | Separately authenticated FastAPI app for platform operators: stages and activates capability/ingestion/query profiles, and manages evaluation suites, runs, and gate reviews. Loopback-bound; has no original-document or raw-passage access. See ADR 004 and ADR 006. |
+| Evaluation worker and reconciler | Executes durable evaluation runs over the production-authorized query path and scores them against labelled test cases; the reconciler republishes lost queue deliveries and fails stale runs, mirroring the ingestion job reconciler. See ADR 006. |
 
 ## Data flow
 
@@ -172,16 +182,46 @@ deployment environment variables. Jobs and index generations retain their ingest
 profile; each query resolves one query profile at its start. During an embedding or lexical
 transition, queries search explicitly enabled compatible cohorts separately and fuse their
 ranked results rather than comparing scores across incompatible vector spaces. See ADR 004
-for the profile, activation, and audit model.
+for the profile, activation, and audit model. A capability profile that can no longer be
+resolved against the current provider schema is marked `retired` and excluded from every
+future selection surface, without touching bundles that already reference it; see ADR 006.
 
 A private platform-operator CLI stages and validates profiles and atomically activates
 ingestion or query bundles with an expected revision and audit reason. It rejects a query
 bundle that omits a cohort used by a ready generation, and rejects an ingestion bundle
 until the active query bundle can read its new lexical and embedding cohorts.
-An optional, separately authenticated Admin Panel serves the same operator workflow on
-the loopback-bound Compose port 8001. It has only the dedicated profile-operator database
-credential and cannot read tenant document content. Production access requires an internal
+A separately authenticated Admin Panel, started with the rest of the Compose stack, serves
+the same operator workflow on the loopback-bound Compose port 8001. It has only the
+dedicated profile-operator database
+credential and cannot read original file contents or raw passages. It can read only
+tenant-scoped document titles and current activated version IDs for the suite picker.
+Production access requires an internal
 TLS-protected ingress; the document API remains the only public service.
+
+The Admin Panel also manages immutable, tenant-scoped evaluation suites and durable RQ
+runs; see ADR 006 for the suite/run data model, execution lifecycle, and gate-review
+workflow. A platform operator may select a tenant from an ID/name-only catalog, then select
+its activated document versions from a title/version picker and current tenant-user IDs
+for each case. Suite creator and case
+execution identity are recorded separately. The panel's database role has no original
+document, raw passage, or user-credential access. Operators can review generated answers
+and citations from completed runs. Evaluation workers load each case's current tenant
+identity and apply that user's role and department scope through the normal query path;
+they reject a case identity or corpus version outside the suite's tenant. A run records
+the selected tenant and verifies that it still matches the suite before execution.
+The API-hosted upload page accepts a tenant editor or admin and sends file bytes only to
+the public API. The Admin Panel never receives original files or tenant credentials.
+Migration `20260923_0016` retains an isolated sample tenant for controlled ingestion
+comparisons; its first administrator is provisioned with a one-time private setup command.
+Migration `20260923_0017` seeds corpus-independent evaluation case templates. Operators
+adapt them into immutable suites after selecting a corpus, current test identity, and
+source labels; templates are never runnable on their own.
+Query candidates run over the same explicitly selected tenant corpus. Ingestion candidates
+remain limited to the isolated sample tenant: changing the ingestion selection for a live
+tenant would affect its future uploads. Those comparisons use byte-identical copies indexed
+under the sample-tenant-only selection. The worker stores stage measurements and manual
+answer-quality reviews in PostgreSQL. Platform activation requires an operator-approved
+completed comparison against the current baseline.
 
 Reranking and generation system instructions are part of their immutable capability
 snapshots and are supplied to the model from the resolved query profile. Prompt edits
@@ -194,9 +234,11 @@ response validation, and citation checks remain application-enforced safeguards.
 
 - Every component runs in a container.
 - Docker Compose starts the local API, processing worker, job reconciler, PostgreSQL/search
-  extensions, Redis, and object storage.
-- An optional Compose observability profile starts Prometheus, cAdvisor, Loki, Grafana Alloy,
-  and Grafana with persistent local volumes. Production reuses the scrape/log schema but must
+  extensions, Redis, object storage, the Admin Panel, evaluation services, and local
+  observability together in one `docker compose up`; none of it is behind a Compose
+  profile.
+- Prometheus, cAdvisor, Loki, Grafana Alloy, and Grafana run with persistent local
+  volumes. Production reuses the scrape/log schema but must
   use secret-managed credentials, authenticated Grafana ingress, encrypted durable storage,
   backups, retention, and Grafana contact-point routing. Grafana provisions and evaluates
   alert rules against Prometheus; notification destinations are configured separately.
@@ -226,3 +268,4 @@ response validation, and citation checks remain application-enforced safeguards.
 - [ADR 003: Tenant isolation and security](adr/003-tenant-isolation.md)
 - [ADR 004: Capability configuration profiles](adr/004-capability-configuration-profiles.md)
 - [ADR 005: Observability](adr/005-observability.md)
+- [ADR 006: Evaluation suite admin dashboard and run lifecycle](adr/006-evaluation-admin-dashboard.md)

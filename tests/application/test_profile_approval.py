@@ -13,6 +13,7 @@ from document_insight.application.configuration.exceptions import (
     ProfileRevisionConflictError,
 )
 from document_insight.application.configuration.models import Capability
+from document_insight.application.evaluation.models import CorpusVariant, EvaluationCorpusManifest
 from document_insight.infrastructure.active_profile.protocol import ActiveProfile
 from document_insight.infrastructure.capability_profile.protocol import CapabilityProfile
 from document_insight.infrastructure.configuration_snapshot.protocol import ConfigurationSnapshot
@@ -145,6 +146,7 @@ def _service(
             get_ingestion_profile_id=AsyncMock(return_value=active_ingestion),
             get_query_profile_id=AsyncMock(return_value=active_query),
             activate=AsyncMock(),
+            create_evaluation_ingestion=AsyncMock(),
         ),
         generations=SimpleNamespace(
             referenced_ingestion_profile_ids=AsyncMock(return_value=ready_ids)
@@ -163,6 +165,119 @@ def _service(
         True,
     )
     return service, state
+
+
+@pytest.mark.anyio
+async def test_test_tenant_can_select_candidate_ingestion_without_platform_switch() -> None:
+    old, new, old_query, combined = _fixtures()
+    service, state = _service(
+        {old.ingestion_profile_id: old, new.ingestion_profile_id: new},
+        {old_query.query_profile_id: old_query, combined.query_profile_id: combined},
+        old.ingestion_profile_id,
+        old_query.query_profile_id,
+    )
+    tenant_id = uuid4()
+    service._evaluation_tenant_id = tenant_id
+    state.active.lock.side_effect = lambda scope, kind: (
+        None if scope == f"evaluation:{tenant_id}" else ActiveProfile(old.ingestion_profile_id, 1)
+    )
+    revision = await service.select_evaluation_ingestion(
+        tenant_id,
+        new.ingestion_profile_id,
+        0,
+        uuid4(),
+        "test candidate",
+    )
+    assert revision == 1
+    state.active.create_evaluation_ingestion.assert_awaited_once_with(
+        f"evaluation:{tenant_id}", new.ingestion_profile_id
+    )
+    state.active.activate.assert_not_awaited()
+
+    with pytest.raises(InvalidProfileProposalError, match="isolated test tenant"):
+        await service.select_evaluation_ingestion(
+            uuid4(), new.ingestion_profile_id, 0, uuid4(), "wrong tenant"
+        )
+
+
+@pytest.mark.anyio
+async def test_query_activation_requires_approved_current_baseline_comparison() -> None:
+    old, new, old_query, combined = _fixtures()
+    service, state = _service(
+        {old.ingestion_profile_id: old, new.ingestion_profile_id: new},
+        {old_query.query_profile_id: old_query, combined.query_profile_id: combined},
+        old.ingestion_profile_id,
+        old_query.query_profile_id,
+    )
+    run_id = uuid4()
+    tenant_id = uuid4()
+    service._evaluation_tenant_id = tenant_id
+    runs = SimpleNamespace(
+        list_runs=AsyncMock(
+            return_value=(
+                SimpleNamespace(
+                    run_id=run_id,
+                    evaluation_mode="query",
+                    comparison_valid=True,
+                    baseline_profile_ids=(old_query.query_profile_id,),
+                    candidate_profile_ids=(combined.query_profile_id,),
+                    corpus_manifest={"evaluation_tenant_id": str(tenant_id)},
+                ),
+            )
+        ),
+    )
+    service._evaluation_runs = runs
+    reviews = SimpleNamespace(get_for_run=AsyncMock(return_value=None))
+    service._evaluation_reviews = reviews
+    with pytest.raises(InvalidProfileProposalError, match="approved evaluation"):
+        await service.activate("query", combined.query_profile_id, 1, uuid4(), "rollout")
+    state.active.activate.assert_not_awaited()
+    reviews.get_for_run.return_value = SimpleNamespace(decision="approve")
+    await service.activate("query", combined.query_profile_id, 1, uuid4(), "rollout")
+    state.active.activate.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_ingestion_activation_requires_reviewed_test_copy_comparison() -> None:
+    old, new, old_query, combined = _fixtures()
+    service, state = _service(
+        {old.ingestion_profile_id: old, new.ingestion_profile_id: new},
+        {old_query.query_profile_id: old_query, combined.query_profile_id: combined},
+        old.ingestion_profile_id,
+        combined.query_profile_id,
+    )
+    version_id, copy_id = uuid4(), uuid4()
+    manifest = EvaluationCorpusManifest(
+        "a" * 64,
+        CorpusVariant((version_id,), {version_id: version_id}),
+        CorpusVariant((copy_id,), {copy_id: version_id}),
+        combined.query_profile_id,
+        combined.query_profile_id,
+        old.ingestion_profile_id,
+        new.ingestion_profile_id,
+    )
+    tenant_id = uuid4()
+    service._evaluation_tenant_id = tenant_id
+    runs = SimpleNamespace(
+        list_runs=AsyncMock(
+            return_value=(
+                SimpleNamespace(
+                    run_id=uuid4(),
+                    evaluation_mode="ingestion",
+                    comparison_valid=True,
+                    corpus_manifest={**manifest.to_json(), "evaluation_tenant_id": str(tenant_id)},
+                ),
+            )
+        ),
+    )
+    service._evaluation_runs = runs
+    reviews = SimpleNamespace(get_for_run=AsyncMock(return_value=None))
+    service._evaluation_reviews = reviews
+    with pytest.raises(InvalidProfileProposalError, match="ingestion evaluation"):
+        await service.activate("ingestion", new.ingestion_profile_id, 1, uuid4(), "rollout")
+    reviews.get_for_run.return_value = SimpleNamespace(decision="approve")
+    await service.activate("ingestion", new.ingestion_profile_id, 1, uuid4(), "rollout")
+    state.active.activate.assert_awaited_once()
 
 
 def _fixtures() -> tuple[

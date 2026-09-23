@@ -21,6 +21,7 @@ from document_insight.application.query.models import (
     QueryCitation,
     QueryEntity,
     QueryResult,
+    QueryStageTrace,
 )
 from document_insight.application.query.profile_resolver import QueryProfileResolver
 from document_insight.infrastructure.active_profile.protocol import ActiveProfileRepository
@@ -65,7 +66,14 @@ class QueryPreparationService:
 
     async def prepare(self, command: PrepareQueryCommand) -> AuthorizedRetrievalRequest:
         """Build an authorization-bounded request without reading chunks or invoking models."""
-        query_profile_id = await self._active_profiles.get_query_profile_id("platform")
+        return await self._prepare(command, None)
+
+    async def _prepare(
+        self, command: PrepareQueryCommand, query_profile_id: UUID | None
+    ) -> AuthorizedRetrievalRequest:
+        """Resolve one requested immutable profile under the actor's current scope."""
+        if query_profile_id is None:
+            query_profile_id = await self._active_profiles.get_query_profile_id("platform")
         if query_profile_id is None:
             raise QueryProfileUnavailableError
         profile = await self._profile_resolver.resolve(query_profile_id)
@@ -89,12 +97,34 @@ class QueryPreparationService:
 
     async def query(self, command: PrepareQueryCommand) -> QueryResult:
         """Run all retrieval branches under one immutable profile and trusted scope."""
+        return await self._query(command, None, None, None)
+
+    async def query_for_evaluation(
+        self,
+        command: PrepareQueryCommand,
+        query_profile_id: UUID,
+        allowed_version_ids: tuple[UUID, ...],
+        trace: QueryStageTrace,
+    ) -> QueryResult:
+        """Run a proposed profile only over explicitly selected authorized test versions."""
+        if not allowed_version_ids:
+            raise ValueError("Evaluation corpus must contain document versions")
+        return await self._query(command, query_profile_id, allowed_version_ids, trace)
+
+    async def _query(
+        self,
+        command: PrepareQueryCommand,
+        query_profile_id: UUID | None,
+        allowed_version_ids: tuple[UUID, ...] | None,
+        trace: QueryStageTrace | None,
+    ) -> QueryResult:
+        """Execute the shared authorization-first production stages."""
         query_started_at = perf_counter()
         query_outcome = "error"
         try:
-            prepared = await self.prepare(command)
+            prepared = await self._prepare(command, query_profile_id)
             profile = await self._profile_resolver.resolve(prepared.query_profile_id)
-            scope = RetrievalScope(prepared.tenant_id, prepared.department_ids)
+            scope = RetrievalScope(prepared.tenant_id, prepared.department_ids, allowed_version_ids)
             entity_matches = await self._entity_matches(
                 scope, prepared.filter_text, profile.retrieval
             )
@@ -105,11 +135,12 @@ class QueryPreparationService:
             try:
                 lexical_results: list[tuple[RetrievedChunk, ...]] = []
                 for cohort in profile.lexical_profile_ids:
-                    lexical_results.append(
-                        await self._retrieval.lexical_search(
-                            scope, cohort, lexical_query, profile.retrieval.lexical_candidate_limit
-                        )
+                    candidates = await self._retrieval.lexical_search(
+                        scope, cohort, lexical_query, profile.retrieval.lexical_candidate_limit
                     )
+                    lexical_results.append(candidates)
+                    if trace is not None:
+                        trace.lexical_by_cohort[cohort] = candidates
             except Exception:
                 self._observe_stage_duration("lexical_retrieval", "error", lexical_started_at)
                 raise
@@ -118,7 +149,7 @@ class QueryPreparationService:
             self._metrics.observe_candidate_count(
                 "lexical_retrieval", sum(len(candidates) for candidates in lexical_lists)
             )
-            vector_lists = await self._vector_lists(prepared.question, scope, profile)
+            vector_lists = await self._vector_lists(prepared.question, scope, profile, trace)
             self._metrics.observe_candidate_count(
                 "vector_retrieval", sum(len(candidates) for candidates in vector_lists)
             )
@@ -135,10 +166,14 @@ class QueryPreparationService:
                 raise
             self._observe_stage_duration("rrf_fusion", "success", fusion_started_at)
             self._metrics.observe_candidate_count("rrf_fusion", len(fused))
+            if trace is not None:
+                trace.fused = fused
             reranked = await self._rerank(
                 prepared.question, fused, profile.retrieval.rerank_candidate_limit, profile
             )
             self._metrics.observe_candidate_count("reranking", len(reranked))
+            if trace is not None:
+                trace.reranked = tuple(chunk for chunk, _ in reranked)
             evidence_started_at = perf_counter()
             selected = reranked[: prepared.top_k]
             if not selected or selected[0][1] < profile.retrieval.insufficient_evidence_threshold:
@@ -168,6 +203,8 @@ class QueryPreparationService:
             cited = tuple(
                 by_id[chunk_id] for chunk_id in answer.cited_chunk_ids if chunk_id in by_id
             )
+            if trace is not None:
+                trace.cited_chunk_ids = tuple(chunk.chunk_id for chunk, _ in cited)
             if not cited:
                 raise QueryProviderUnavailableError
             citations = tuple(
@@ -216,7 +253,11 @@ class QueryPreparationService:
         )
 
     async def _vector_lists(
-        self, question: str, scope: RetrievalScope, profile: ResolvedQueryProfile
+        self,
+        question: str,
+        scope: RetrievalScope,
+        profile: ResolvedQueryProfile,
+        trace: QueryStageTrace | None = None,
     ) -> tuple[tuple[RetrievedChunk, ...], ...]:
         """Embed once per compatible cohort and never compare raw cross-cohort scores."""
         result: list[tuple[RetrievedChunk, ...]] = []
@@ -235,11 +276,12 @@ class QueryPreparationService:
             self._observe_stage_duration("query_embedding", "success", embedding_started_at)
             vector_retrieval_started_at = perf_counter()
             try:
-                result.append(
-                    await self._retrieval.vector_search(
-                        scope, profile_id, vector, profile.retrieval.vector_candidate_limit
-                    )
+                candidates = await self._retrieval.vector_search(
+                    scope, profile_id, vector, profile.retrieval.vector_candidate_limit
                 )
+                result.append(candidates)
+                if trace is not None:
+                    trace.vector_by_cohort[profile_id] = candidates
             except Exception:
                 self._observe_stage_duration(
                     "vector_retrieval", "error", vector_retrieval_started_at

@@ -16,6 +16,15 @@ class StoredDocument:
     created_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class EvaluationDocumentOption:
+    """Activated document metadata shown in the operator's suite picker."""
+
+    document_id: UUID
+    title: str
+    version_id: UUID
+
+
 class DocumentRepository(Protocol):
     """Persistence operations owned by logical documents."""
 
@@ -24,6 +33,11 @@ class DocumentRepository(Protocol):
 
     async def list_for_tenant(self, tenant_id: UUID) -> tuple[StoredDocument, ...]:
         """List stable documents for one tenant without department authorization."""
+
+    async def list_active_for_operator(
+        self, tenant_id: UUID
+    ) -> tuple[EvaluationDocumentOption, ...]:
+        """List activated version IDs and titles under metadata-only operator grants."""
 
     async def lock(self, document_id: UUID, tenant_id: UUID) -> bool:
         """Lock an existing logical document while allocating its next version."""

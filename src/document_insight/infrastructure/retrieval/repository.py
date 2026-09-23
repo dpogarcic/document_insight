@@ -40,7 +40,7 @@ class SqlAlchemyAuthorizedRetrievalRepository(AuthorizedRetrievalRepository):
         terms = tuple(term for term in filter_text.casefold().split() if term)
         if not terms or not scope.department_ids:
             return ()
-        rows = await self._session.execute(
+        statement = (
             select(EntityModel.document_version_id, EntityModel.display_value, EntityModel.label)
             .join(
                 DocumentModel,
@@ -55,6 +55,11 @@ class SqlAlchemyAuthorizedRetrievalRepository(AuthorizedRetrievalRepository):
             .order_by(EntityModel.occurrence_count.desc())
             .limit(limit)
         )
+        if scope.allowed_version_ids is not None:
+            statement = statement.where(
+                EntityModel.document_version_id.in_(scope.allowed_version_ids)
+            )
+        rows = await self._session.execute(statement)
         return tuple(
             EntityMatch(version_id, display_value, label)
             for version_id, display_value, label in rows
@@ -121,14 +126,22 @@ class SqlAlchemyAuthorizedRetrievalRepository(AuthorizedRetrievalRepository):
 
     @staticmethod
     def _chunks_from_rows(
-        rows: Result[tuple[UUID, UUID, UUID, str, str, int, float]],
+        rows: Result[tuple[UUID, UUID, UUID, str, str, int, int, int, float]],
     ) -> tuple[RetrievedChunk, ...]:
         """Convert selected columns to framework-independent typed candidates."""
         return tuple(
             RetrievedChunk(
-                chunk_id, document_id, version_id, title, text, page_number, float(score)
+                chunk_id,
+                document_id,
+                version_id,
+                title,
+                text,
+                page_number,
+                float(score),
+                start_offset,
+                end_offset,
             )
-            for chunk_id, document_id, version_id, title, text, page_number, score in rows
+            for chunk_id, document_id, version_id, title, text, page_number, start_offset, end_offset, score in rows
         )
 
     @staticmethod
@@ -146,9 +159,9 @@ class SqlAlchemyAuthorizedRetrievalRepository(AuthorizedRetrievalRepository):
 
     def _chunk_statement(
         self, scope: RetrievalScope
-    ) -> Select[tuple[UUID, UUID, UUID, str, str, int]]:
+    ) -> Select[tuple[UUID, UUID, UUID, str, str, int, int, int]]:
         """Select active chunks after tenant and department policy predicates."""
-        return (
+        statement = (
             select(
                 ChunkModel.id,
                 DocumentModel.id,
@@ -156,6 +169,8 @@ class SqlAlchemyAuthorizedRetrievalRepository(AuthorizedRetrievalRepository):
                 DocumentModel.title,
                 ChunkModel.text,
                 ChunkModel.page_number,
+                ChunkModel.start_offset,
+                ChunkModel.end_offset,
             )
             .join(
                 DocumentModel,
@@ -167,3 +182,8 @@ class SqlAlchemyAuthorizedRetrievalRepository(AuthorizedRetrievalRepository):
                 self._authorized_document_predicate(scope, DocumentModel.id),
             )
         )
+        if scope.allowed_version_ids is not None:
+            statement = statement.where(
+                ChunkModel.document_version_id.in_(scope.allowed_version_ids)
+            )
+        return statement

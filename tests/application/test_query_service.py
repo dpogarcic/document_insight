@@ -15,6 +15,7 @@ from document_insight.application.configuration.models import (
 )
 from document_insight.application.query.commands import PrepareQueryCommand
 from document_insight.application.query.exceptions import QueryProfileUnavailableError
+from document_insight.application.query.models import QueryStageTrace
 from document_insight.application.query.service import QueryPreparationService
 from document_insight.infrastructure.generation.protocol import GroundedAnswer, GroundingPassage
 from document_insight.infrastructure.reranker.protocol import RerankInput, RerankScore
@@ -251,6 +252,40 @@ async def test_query_applies_the_same_trusted_scope_to_every_retrieval_branch() 
     assert result.entities[0].text == "Acme"
     assert all(scope.department_ids == (finance_id, legal_id) for scope in retrieval.scopes)
     assert all(scope.tenant_id == tenant_id for scope in retrieval.scopes)
+
+
+@pytest.mark.anyio
+async def test_evaluation_uses_explicit_profile_and_scoped_corpus_with_stage_trace() -> None:
+    tenant_id, department_id, profile_id, version_id = (uuid4() for _ in range(4))
+    chunk = RetrievedChunk(uuid4(), uuid4(), version_id, "Contract", "Annual renewal.", 2, 0.8)
+    retrieval = Retrieval(chunk)
+    service = QueryPreparationService(
+        active_profiles=ActiveProfiles(None),
+        profile_resolver=Profiles(build_profile(profile_id)),
+        departments=Departments((department_id,)),
+        retrieval=retrieval,
+        embedders=Embedders(),
+        rerankers=Rerankers(),
+        generators=Generators(),
+    )
+    trace = QueryStageTrace()
+    result = await service.query_for_evaluation(
+        PrepareQueryCommand(
+            "When does it renew?",
+            None,
+            5,
+            AuthorizationContext(uuid4(), tenant_id, (department_id,), UserRole.VIEWER),
+        ),
+        profile_id,
+        (version_id,),
+        trace,
+    )
+    assert result.citations[0].chunk_id == chunk.chunk_id
+    assert all(scope.allowed_version_ids == (version_id,) for scope in retrieval.scopes)
+    assert trace.lexical_by_cohort and trace.vector_by_cohort
+    assert trace.fused == (chunk,)
+    assert trace.reranked == (chunk,)
+    assert trace.cited_chunk_ids == (chunk.chunk_id,)
 
 
 @pytest.mark.anyio

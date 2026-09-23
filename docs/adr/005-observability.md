@@ -105,6 +105,13 @@ limits and the final citation limit (for example `K=1`, `K=5`, and `K=10`). Eval
 reports may retain these fixed values; arbitrary request `top_k` values must not become a
 Prometheus label.
 
+Relevance labels use immutable source-version page spans. Precision@K divides by K;
+Recall@K is reported only when all relevant spans for a case have been labelled.
+Overlapping candidate chunks count as relevant when they cover at least half the labelled
+span. Evaluation history also retains citation precision/recall, answerability accuracy,
+per-case operator answer-quality scores, and the numerator/denominator behind each
+aggregate. Baseline and candidate measurements remain separate.
+
 Evaluation reports may retain per-query relevance judgments in the controlled evaluation
 artifact. Recall@K and Precision@K are not emitted to production Prometheus; production
 telemetry must not contain evaluation query text, document text, passage identifiers, or
@@ -149,7 +156,8 @@ relevance labels tied to a customer document.
 
 ## Acceptance criteria
 
-- Local Compose can start the application and optional observability profile together.
+- Local Compose starts the application and the observability stack together with a
+  single `docker compose up`; nothing is gated behind a Compose profile.
 - Grafana exposes provisioned Prometheus and Loki data sources, while internal collection
   services do not publish host ports.
 - Metrics endpoints require the monitoring secret and do not appear in public API schemas.

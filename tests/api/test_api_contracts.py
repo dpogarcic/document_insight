@@ -203,6 +203,7 @@ async def test_openapi_exposes_defined_endpoints(client: AsyncClient) -> None:
         "/auth/register",
         "/documents",
         "/documents/{document_id}/activate",
+        "/evaluation-corpus/identity",
         "/ingest",
         "/jobs/{job_id}",
         "/query",

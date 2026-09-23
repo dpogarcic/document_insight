@@ -1,9 +1,11 @@
 """FastAPI application factory."""
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from document_insight import __version__
 from document_insight.api.exception_handlers import register_exception_handlers
@@ -46,6 +48,11 @@ def create_app() -> FastAPI:
     application.add_middleware(CorrelationIdMiddleware)
     application.add_middleware(PrometheusMetricsMiddleware)
     application.include_router(api_router)
+    application.mount(
+        "/evaluation-corpus/assets",
+        StaticFiles(directory=Path(__file__).parent / "static" / "evaluation_corpus"),
+        name="evaluation-corpus-assets",
+    )
 
     async def metrics_endpoint(request: Request) -> Response:
         """Serve authenticated metrics to the private monitoring collector."""

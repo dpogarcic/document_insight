@@ -21,12 +21,20 @@ from document_insight.application.configuration.models import (
     RerankingConfiguration,
     RetrievalConfiguration,
 )
+from document_insight.application.evaluation.models import EvaluationCorpusManifest
 from document_insight.infrastructure.active_profile.protocol import ActiveProfileRepository
 from document_insight.infrastructure.capability_profile.protocol import CapabilityProfileRepository
 from document_insight.infrastructure.configuration_snapshot.protocol import (
     ConfigurationSnapshotRepository,
 )
 from document_insight.infrastructure.database.transaction import TransactionManager
+from document_insight.infrastructure.evaluation_gate_review.protocol import (
+    EvaluationGateReviewRepository,
+)
+from document_insight.infrastructure.evaluation_run.protocol import (
+    EvaluationRunRepository,
+    RunStatus,
+)
 from document_insight.infrastructure.index_generation.protocol import IndexGenerationRepository
 from document_insight.infrastructure.ingestion_profile.protocol import (
     IngestionProfile,
@@ -76,6 +84,9 @@ class ProfileApprovalService:
         activations: ProfileActivationRepository,
         transactions: TransactionManager,
         mistral_available: bool,
+        evaluation_runs: EvaluationRunRepository | None = None,
+        evaluation_tenant_id: UUID | None = None,
+        evaluation_reviews: EvaluationGateReviewRepository | None = None,
     ) -> None:
         self._snapshots = snapshots
         self._capabilities = capabilities
@@ -86,6 +97,9 @@ class ProfileApprovalService:
         self._activations = activations
         self._transactions = transactions
         self._mistral_available = mistral_available
+        self._evaluation_runs = evaluation_runs
+        self._evaluation_tenant_id = evaluation_tenant_id
+        self._evaluation_reviews = evaluation_reviews
 
     async def create_capability(
         self, capability: Capability, name: str, configuration: dict[str, Any]
@@ -193,6 +207,13 @@ class ProfileApprovalService:
                 raise ProfileRevisionConflictError
             if current.profile_id == profile_id:
                 raise InvalidProfileProposalError("Profile is already active")
+            if self._evaluation_runs is not None:
+                if kind == "query":
+                    await self._require_approved_evaluation(profile_id, current.profile_id)
+                elif active_query is not None:
+                    await self._require_approved_ingestion_evaluation(
+                        profile_id, current.profile_id, active_query.profile_id
+                    )
             if kind == "ingestion":
                 target = await self._require_ingestion(profile_id)
                 if active_query is None:
@@ -221,6 +242,111 @@ class ProfileApprovalService:
                 )
             )
             return current.revision + 1
+
+    async def _require_approved_evaluation(self, candidate_id: UUID, baseline_id: UUID) -> None:
+        """Require a completed, manually approved comparison against today's baseline."""
+        assert self._evaluation_runs is not None
+        if self._evaluation_reviews is None:
+            raise InvalidProfileProposalError("Evaluation gate reader is unavailable")
+        for run in await self._evaluation_runs.list_runs(status=RunStatus.COMPLETED):
+            if (
+                run.evaluation_mode != "query"
+                or run.candidate_profile_ids != (candidate_id,)
+                or run.baseline_profile_ids != (baseline_id,)
+                or not run.comparison_valid
+                or not run.corpus_manifest.get("evaluation_tenant_id")
+            ):
+                continue
+            review = await self._evaluation_reviews.get_for_run(run.run_id)
+            if review is not None and review.decision == "approve":
+                return
+        raise InvalidProfileProposalError(
+            "An approved evaluation of this query policy against the current baseline is required"
+        )
+
+    async def select_evaluation_ingestion(
+        self,
+        tenant_id: UUID,
+        profile_id: UUID,
+        expected_revision: int,
+        actor_id: UUID,
+        reason: str,
+    ) -> int:
+        """Select a candidate only for future uploads in one dedicated test tenant."""
+        if self._evaluation_tenant_id is None or tenant_id != self._evaluation_tenant_id:
+            raise InvalidProfileProposalError("Only the isolated test tenant can select ingestion")
+        if expected_revision < 0 or not reason.strip() or len(reason) > 512:
+            raise InvalidProfileProposalError("Evaluation selection reason or revision is invalid")
+        scope = f"evaluation:{tenant_id}"
+        async with self._transactions.begin():
+            await self._require_ingestion(profile_id)
+            current = await self._active.lock(scope, "ingestion")
+            if current is None:
+                if expected_revision != 0:
+                    raise ProfileRevisionConflictError
+                baseline = await self._active.lock("platform", "ingestion")
+                if baseline is None:
+                    raise InvalidProfileProposalError("No platform ingestion policy is active")
+                await self._active.create_evaluation_ingestion(scope, profile_id)
+                old_id = baseline.profile_id
+                new_revision = 1
+            else:
+                if current.revision != expected_revision:
+                    raise ProfileRevisionConflictError
+                if current.profile_id == profile_id:
+                    raise InvalidProfileProposalError(
+                        "Evaluation ingestion policy is already selected"
+                    )
+                await self._active.activate(scope, "ingestion", profile_id, current.revision)
+                old_id = current.profile_id
+                new_revision = current.revision + 1
+            await self._activations.create(
+                CreateProfileActivation(
+                    scope,
+                    "ingestion",
+                    old_id,
+                    profile_id,
+                    actor_id,
+                    reason.strip(),
+                    new_revision,
+                )
+            )
+            return new_revision
+
+    async def _require_approved_ingestion_evaluation(
+        self, candidate_id: UUID, baseline_id: UUID, active_query_id: UUID
+    ) -> None:
+        """Require a reviewed, current-query comparison of indexed test copies."""
+        assert self._evaluation_runs is not None
+        if self._evaluation_reviews is None:
+            raise InvalidProfileProposalError("Evaluation gate reader is unavailable")
+        if self._evaluation_tenant_id is None:
+            raise InvalidProfileProposalError("Configure an approved evaluation tenant first")
+        for run in await self._evaluation_runs.list_runs(status=RunStatus.COMPLETED):
+            if (
+                run.evaluation_mode != "ingestion"
+                or not run.comparison_valid
+                or run.corpus_manifest.get("evaluation_tenant_id")
+                != str(self._evaluation_tenant_id)
+            ):
+                continue
+            try:
+                manifest = EvaluationCorpusManifest.from_json(run.corpus_manifest)
+            except (ValueError, TypeError):
+                continue
+            if (
+                manifest.baseline_ingestion_profile_id != baseline_id
+                or manifest.candidate_ingestion_profile_id != candidate_id
+                or manifest.baseline_query_profile_id != active_query_id
+                or manifest.candidate_query_profile_id != active_query_id
+            ):
+                continue
+            review = await self._evaluation_reviews.get_for_run(run.run_id)
+            if review is not None and review.decision == "approve":
+                return
+        raise InvalidProfileProposalError(
+            "An approved test-tenant ingestion evaluation against the current policies is required"
+        )
 
     async def _require_validated(self, profile_id: UUID, capability: Capability) -> None:
         profile = await self._capabilities.get(profile_id)

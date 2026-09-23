@@ -22,6 +22,7 @@ services:
       - QUERY_RATE_LIMIT_REQUESTS=${QUERY_RATE_LIMIT_REQUESTS:-30}
       - QUERY_RATE_LIMIT_WINDOW_SECONDS=${QUERY_RATE_LIMIT_WINDOW_SECONDS:-60}
       - RQ_INGESTION_QUEUE_NAME=ingestion
+      - EVALUATION_TENANT_ID=${EVALUATION_TENANT_ID:-}
       - METRICS_BEARER_TOKEN=${METRICS_BEARER_TOKEN:-}
       - PROMETHEUS_MULTIPROC_DIR=/run/prometheus-multiproc
     depends_on:
@@ -63,7 +64,6 @@ services:
   # Disposable PostgreSQL instance for database isolation tests only.
   database-test:
     image: pgvector/pgvector:pg17
-    profiles: [test]
     ports:
       - "127.0.0.1:5433:5432"
     environment:
@@ -83,7 +83,6 @@ services:
 
   test-migrate:
     build: .
-    profiles: [test]
     command: uv run --no-sync alembic upgrade head
     environment:
       DATABASE_URL: postgresql+asyncpg://document_insight_test_owner:${TEST_DATABASE_OWNER_PASSWORD:-}@database-test:5432/document_insight_test
@@ -95,7 +94,6 @@ services:
 
   test-bootstrap-roles:
     build: .
-    profiles: [test]
     command: uv run --no-sync python -m document_insight.infrastructure.database.bootstrap_roles
     environment:
       DATABASE_URL: postgresql+asyncpg://document_insight_test_owner:${TEST_DATABASE_OWNER_PASSWORD:-}@database-test:5432/document_insight_test
@@ -123,7 +121,6 @@ services:
 
   redis-test:
     image: redis:7.4-alpine
-    profiles: [test]
     ports:
       - "127.0.0.1:6380:6379"
     tmpfs:
@@ -195,13 +192,13 @@ services:
   profile-operator:
     build: .
     image: document-insight-app:latest
-    profiles: [operator]
     entrypoint: ["uv", "run", "--no-sync", "python", "-m", "document_insight.application.configuration.operator_cli"]
     command: ["--help"]
     environment:
       DATABASE_PROFILE_OPERATOR_URL: ${DATABASE_PROFILE_OPERATOR_URL:-}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:?Set MISTRAL_API_KEY in .env}
+      EVALUATION_TENANT_ID: ${EVALUATION_TENANT_ID:-}
     depends_on:
       bootstrap-roles:
         condition: service_completed_successfully
@@ -209,19 +206,39 @@ services:
       - ./src:/app/src:ro
       - ./profiles:/app/profiles:ro
 
+  evaluation-identity-init:
+    build: .
+    image: document-insight-app:latest
+    entrypoint: ["uv", "run", "--no-sync", "python", "-m", "document_insight.application.evaluation.identity_cli"]
+    command: ["--help"]
+    environment:
+      DATABASE_AUTH_URL: ${DATABASE_AUTH_URL:?Set DATABASE_AUTH_URL in .env}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
+      EVALUATION_TENANT_ID: ${EVALUATION_TENANT_ID:?Set EVALUATION_TENANT_ID in .env}
+    depends_on:
+      bootstrap-roles:
+        condition: service_completed_successfully
+    volumes:
+      - ./src:/app/src:ro
+    stdin_open: true
+    tty: true
+
   admin-panel:
     build: .
     image: document-insight-app:latest
-    profiles: [admin]
     ports:
       - "127.0.0.1:8001:8001"
     environment:
       DATABASE_PROFILE_OPERATOR_URL: ${DATABASE_PROFILE_OPERATOR_URL:-}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:?Set MISTRAL_API_KEY in .env}
+      EVALUATION_TENANT_ID: ${EVALUATION_TENANT_ID:-}
+      REDIS_URL: ${REDIS_URL:?Set REDIS_URL in .env}
+      RQ_EVALUATION_QUEUE_NAME: ${RQ_EVALUATION_QUEUE_NAME:-evaluation}
       ADMIN_PANEL_USERNAME: ${ADMIN_PANEL_USERNAME:-}
       ADMIN_PANEL_PASSWORD: ${ADMIN_PANEL_PASSWORD:-}
       ADMIN_PANEL_SECURE_COOKIES: ${ADMIN_PANEL_SECURE_COOKIES:-false}
+      API_PUBLIC_BASE_URL: ${API_PUBLIC_BASE_URL:-http://127.0.0.1:8000}
     depends_on:
       bootstrap-roles:
         condition: service_completed_successfully
@@ -276,6 +293,48 @@ services:
       - ./src:/app/src
       - prometheus-multiproc:/run/prometheus-multiproc
 
+  evaluation-worker:
+    build: .
+    image: document-insight-worker:latest
+    command: >
+      uv run --no-sync rq worker --worker-class document_insight.worker.monitored.MonitoredWorker
+      --url redis://redis:6379/0 ${RQ_EVALUATION_QUEUE_NAME:-evaluation}
+    environment:
+      DATABASE_READ_URL: ${DATABASE_READ_URL:?Set DATABASE_READ_URL in .env}
+      DATABASE_PROFILE_OPERATOR_URL: ${DATABASE_PROFILE_OPERATOR_URL:?Set DATABASE_PROFILE_OPERATOR_URL in .env}
+      REDIS_URL: ${REDIS_URL:?Set REDIS_URL in .env}
+      RQ_EVALUATION_QUEUE_NAME: ${RQ_EVALUATION_QUEUE_NAME:-evaluation}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:?Set MISTRAL_API_KEY in .env}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      bootstrap-roles:
+        condition: service_completed_successfully
+    volumes:
+      - ./src:/app/src:ro
+
+  evaluation-reconciler:
+    build: .
+    image: document-insight-worker:latest
+    command: uv run --no-sync python -m document_insight.worker.evaluation_reconciler
+    environment:
+      DATABASE_PROFILE_OPERATOR_URL: ${DATABASE_PROFILE_OPERATOR_URL:?Set DATABASE_PROFILE_OPERATOR_URL in .env}
+      REDIS_URL: ${REDIS_URL:?Set REDIS_URL in .env}
+      RQ_EVALUATION_QUEUE_NAME: ${RQ_EVALUATION_QUEUE_NAME:-evaluation}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      bootstrap-roles:
+        condition: service_completed_successfully
+    volumes:
+      - ./src:/app/src:ro
+
   reconciler:
     build: .
     image: document-insight-worker:latest
@@ -305,7 +364,6 @@ services:
 
   monitoring-token-init:
     image: busybox:1.37.0
-    profiles: [observability]
     environment:
       METRICS_BEARER_TOKEN: ${METRICS_BEARER_TOKEN:-}
     command: >
@@ -316,7 +374,6 @@ services:
 
   prometheus:
     image: prom/prometheus:v3.13.3
-    profiles: [observability]
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -333,7 +390,6 @@ services:
 
   cadvisor:
     image: ghcr.io/google/cadvisor:v0.60.6
-    profiles: [observability]
     privileged: true
     command: ["--docker_only=true"]
     volumes:
@@ -345,7 +401,6 @@ services:
 
   loki:
     image: grafana/loki:3.7.0
-    profiles: [observability]
     command: -config.file=/etc/loki/loki.yml
     volumes:
       - ./observability/loki/loki.yml:/etc/loki/loki.yml:ro
@@ -353,7 +408,6 @@ services:
 
   alloy:
     image: grafana/alloy:v1.19.2
-    profiles: [observability]
     command: run /etc/alloy/config.alloy --server.http.listen-addr=0.0.0.0:12345
     volumes:
       - ./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
@@ -364,7 +418,6 @@ services:
 
   grafana:
     image: grafana/grafana:12.4
-    profiles: [observability]
     ports:
       - "127.0.0.1:3001:3000"
     environment:

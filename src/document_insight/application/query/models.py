@@ -1,7 +1,9 @@
 """Typed handoff from query authorization to future retrieval adapters."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import UUID
+
+from document_insight.infrastructure.retrieval.protocol import RetrievedChunk
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,3 +49,14 @@ class QueryResult:
     confidence: float
     citations: tuple[QueryCitation, ...]
     entities: tuple[QueryEntity, ...]
+
+
+@dataclass(slots=True)
+class QueryStageTrace:
+    """Evaluation-only ranked candidates from the production query stages."""
+
+    lexical_by_cohort: dict[UUID, tuple[RetrievedChunk, ...]] = field(default_factory=dict)
+    vector_by_cohort: dict[UUID, tuple[RetrievedChunk, ...]] = field(default_factory=dict)
+    fused: tuple[RetrievedChunk, ...] = ()
+    reranked: tuple[RetrievedChunk, ...] = ()
+    cited_chunk_ids: tuple[UUID, ...] = ()

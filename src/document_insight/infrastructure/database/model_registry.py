@@ -10,6 +10,15 @@ from document_insight.infrastructure.document.model import DocumentModel
 from document_insight.infrastructure.document_department.model import DocumentDepartmentModel
 from document_insight.infrastructure.document_version.model import DocumentVersionModel
 from document_insight.infrastructure.entity.model import EntityModel
+from document_insight.infrastructure.evaluation_aggregate.model import AggregateMeasurementModel
+from document_insight.infrastructure.evaluation_case_result.model import EvaluationCaseResultModel
+from document_insight.infrastructure.evaluation_case_template.model import (
+    EvaluationCaseTemplateModel,
+)
+from document_insight.infrastructure.evaluation_gate_review.model import GateReviewModel
+from document_insight.infrastructure.evaluation_run.model import EvaluationRunModel
+from document_insight.infrastructure.evaluation_suite.model import EvaluationSuiteRevisionModel
+from document_insight.infrastructure.evaluation_test_case.model import EvaluationTestCaseModel
 from document_insight.infrastructure.extracted_document.model import ExtractedDocumentModel
 from document_insight.infrastructure.index_generation.model import IndexGenerationModel
 from document_insight.infrastructure.ingestion_profile.model import IngestionProfileModel
@@ -36,6 +45,13 @@ __all__ = [
     "DocumentVersionModel",
     "EntityModel",
     "ExtractedDocumentModel",
+    "EvaluationRunModel",
+    "EvaluationCaseResultModel",
+    "EvaluationCaseTemplateModel",
+    "AggregateMeasurementModel",
+    "GateReviewModel",
+    "EvaluationSuiteRevisionModel",
+    "EvaluationTestCaseModel",
     "IndexGenerationModel",
     "IngestionProfileModel",
     "JobModel",

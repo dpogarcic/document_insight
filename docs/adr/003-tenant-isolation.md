@@ -65,6 +65,16 @@ never changes or overrides the tenant, department, role, or document-permission 
 - This decision keeps a shared PostgreSQL schema. Per-tenant schemas are not required to enforce the current isolation contract and would add migration and operations complexity without replacing role grants or RLS.
 - The application database role can set PostgreSQL custom session variables. RLS therefore protects against missing application predicates and accidental cross-tenant queries, but arbitrary SQL execution under that role could forge `app.user_id` or `app.job_id`. Parameterized SQL, narrow database grants, secret handling, and SQL-injection prevention remain required. A future stronger database identity assertion would be needed if the threat model requires RLS to withstand arbitrary SQL execution using a compromised runtime credential.
 - Object-storage keys are tenant and document-version scoped; object access is mediated by the application rather than exposed as broad public bucket access.
+- The separately authenticated platform Admin Panel may list tenant IDs and names for
+  evaluation suite selection and read only document ID, tenant ID, title, and current
+  activated version ID for its tenant-scoped document picker. Its database role has no
+  document-version, raw passage, or user-credential grants; it can read generated answers
+  for manual run review. A selected
+  tenant ID is recorded in each suite and run; it never becomes an
+  authorization scope by itself. The evaluation worker loads the current user named by
+  each case, rejects identities outside the suite tenant, and uses that user's role and
+  department scope before retrieval. Selected corpus versions must belong to the same
+  tenant and be ready and activated.
 - Documents and indexed chunks carry authorization metadata: `tenant_id`, a synchronized department-set projection, allowed roles, document ID, version, validity/status, and any classification needed for policy enforcement. The `document_departments` association remains the source of truth for department policy.
 - The vector/lexical retrieval query receives the same authorization metadata filter before scoring. It must not retrieve cross-tenant candidates and discard them later.
 

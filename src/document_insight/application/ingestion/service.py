@@ -62,6 +62,7 @@ class IngestionService:
         object_storage: OriginalObjectStorage,
         processing_queue: ProcessingQueue,
         max_upload_bytes: int,
+        evaluation_tenant_id: UUID | None = None,
     ) -> None:
         self._documents = documents
         self._departments = departments
@@ -74,6 +75,7 @@ class IngestionService:
         self._object_storage = object_storage
         self._processing_queue = processing_queue
         self._max_upload_bytes = max_upload_bytes
+        self._evaluation_tenant_id = evaluation_tenant_id
 
     async def ingest(self, command: IngestDocumentCommand) -> IngestionResult:
         """Store an upload and persist its metadata, compensating on database failure."""
@@ -109,6 +111,12 @@ class IngestionService:
                 ingestion_profile_id = await self._active_profiles.get_ingestion_profile_id(
                     "platform"
                 )
+                if command.actor.tenant_id == self._evaluation_tenant_id:
+                    override = await self._active_profiles.get_ingestion_profile_id(
+                        f"evaluation:{command.actor.tenant_id}"
+                    )
+                    if override is not None:
+                        ingestion_profile_id = override
                 if ingestion_profile_id is None:
                     raise ProcessingProfileUnavailableError
                 if command.document_id is None:

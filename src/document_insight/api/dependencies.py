@@ -279,6 +279,7 @@ def get_ingestion_service(
         object_storage=object_storage,
         processing_queue=processing_queue,
         max_upload_bytes=settings.upload_max_bytes,
+        evaluation_tenant_id=settings.evaluation_tenant_id,
     )
 
 

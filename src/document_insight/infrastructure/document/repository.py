@@ -6,7 +6,11 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from document_insight.infrastructure.document.model import DocumentModel
-from document_insight.infrastructure.document.protocol import DocumentRepository, StoredDocument
+from document_insight.infrastructure.document.protocol import (
+    DocumentRepository,
+    EvaluationDocumentOption,
+    StoredDocument,
+)
 
 
 class SqlAlchemyDocumentRepository(DocumentRepository):
@@ -42,6 +46,28 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
                 created_at=document.created_at,
             )
             for document in rows
+        )
+
+    async def list_active_for_operator(
+        self, tenant_id: UUID
+    ) -> tuple[EvaluationDocumentOption, ...]:
+        """Use only the document columns granted to the platform operator."""
+        rows = await self._session.execute(
+            select(
+                DocumentModel.id,
+                DocumentModel.title,
+                DocumentModel.current_ready_version_id,
+            )
+            .where(
+                DocumentModel.tenant_id == tenant_id,
+                DocumentModel.current_ready_version_id.is_not(None),
+            )
+            .order_by(DocumentModel.title, DocumentModel.id)
+        )
+        return tuple(
+            EvaluationDocumentOption(document_id, title, version_id)
+            for document_id, title, version_id in rows
+            if version_id is not None
         )
 
     async def lock(self, document_id: UUID, tenant_id: UUID) -> bool:

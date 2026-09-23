@@ -74,6 +74,9 @@ class DocumentVersionRepository(Protocol):
     async def get_document_id(self, version_id: UUID, tenant_id: UUID) -> UUID | None:
         """Return the logical document owning a tenant-scoped version."""
 
+    async def get_content_sha256(self, version_id: UUID, tenant_id: UUID) -> str | None:
+        """Return the immutable original's hash for corpus copy verification."""
+
     async def list_latest_for_document_ids(
         self, document_ids: tuple[UUID, ...], tenant_id: UUID
     ) -> tuple[LatestDocumentVersion, ...]:

@@ -80,3 +80,16 @@ class SqlAlchemyActiveProfileRepository(ActiveProfileRepository):
             )
             .values(**value, revision=revision + 1)
         )
+
+    async def create_evaluation_ingestion(self, scope: str, profile_id: UUID) -> None:
+        """Insert a tenant-isolated override without touching the platform pointer."""
+        if not scope.startswith("evaluation:"):
+            raise ValueError("Only evaluation scopes may be created here")
+        self._session.add(
+            ActiveProfileModel(
+                scope=scope,
+                profile_kind="ingestion",
+                ingestion_profile_id=profile_id,
+                revision=1,
+            )
+        )

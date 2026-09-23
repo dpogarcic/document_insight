@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import text
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from document_insight.application.configuration.approval import ProfileApprovalService
@@ -22,6 +22,7 @@ from document_insight.infrastructure.configuration_snapshot.repository import (
     SqlAlchemyConfigurationSnapshotRepository,
 )
 from document_insight.infrastructure.database.transaction import SqlAlchemyTransactionManager
+from document_insight.infrastructure.document.repository import SqlAlchemyDocumentRepository
 from document_insight.infrastructure.index_generation.repository import (
     SqlAlchemyIndexGenerationRepository,
 )
@@ -34,6 +35,7 @@ from document_insight.infrastructure.profile_activation.repository import (
 from document_insight.infrastructure.query_profile.repository import (
     SqlAlchemyQueryProfileRepository,
 )
+from document_insight.infrastructure.tenant.repository import SqlAlchemyTenantRepository
 
 
 class _TestSettings(BaseSettings):
@@ -50,7 +52,7 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-def _owner_url():  # type: ignore[no-untyped-def]
+def _owner_url() -> URL:
     """Derive the disposable test owner URL without printing credentials."""
     settings = _TestSettings()
     if not settings.test_database_runtime_url or not settings.test_database_owner_password:
@@ -62,8 +64,8 @@ def _owner_url():  # type: ignore[no-untyped-def]
 
 
 @pytest.mark.anyio
-async def test_operator_role_has_configuration_grants_without_document_access() -> None:
-    """Profile approval does not reuse a tenant API or migration-owner credential."""
+async def test_operator_role_has_configuration_grants_and_limited_document_metadata() -> None:
+    """The operator can read picker metadata without document content access."""
     engine = create_async_engine(_owner_url())
     try:
         async with engine.connect() as connection:
@@ -74,13 +76,124 @@ async def test_operator_role_has_configuration_grants_without_document_access() 
                     has_table_privilege(current_user, 'configuration_snapshots', 'INSERT'),
                     has_table_privilege(current_user, 'capability_profiles', 'INSERT'),
                     has_table_privilege(current_user, 'active_profiles', 'UPDATE'),
+                    has_table_privilege(current_user, 'active_profiles', 'INSERT'),
                     has_table_privilege(current_user, 'profile_activations', 'INSERT'),
+                    has_table_privilege(current_user, 'evaluation_runs', 'INSERT'),
+                    has_table_privilege(current_user, 'evaluation_gate_reviews', 'INSERT'),
+                    has_column_privilege(current_user, 'tenants', 'id', 'SELECT'),
+                    has_column_privilege(current_user, 'tenants', 'name', 'SELECT'),
                     has_table_privilege(current_user, 'chunks', 'SELECT'),
-                    has_table_privilege(current_user, 'documents', 'SELECT')
+                    has_column_privilege(current_user, 'documents', 'id', 'SELECT'),
+                    has_column_privilege(current_user, 'documents', 'tenant_id', 'SELECT'),
+                    has_column_privilege(current_user, 'documents', 'title', 'SELECT'),
+                    has_column_privilege(current_user, 'documents', 'current_ready_version_id', 'SELECT'),
+                    has_column_privilege(current_user, 'documents', 'created_by', 'SELECT'),
+                    has_table_privilege(current_user, 'document_versions', 'SELECT')
             """)
             )
-            assert grants.one() == (True, True, True, True, False, False)
+            assert grants.one() == (
+                True,
+                True,
+                True,
+                True,
+                True,
+                True,
+                True,
+                True,
+                True,
+                False,
+                True,
+                True,
+                True,
+                True,
+                False,
+                False,
+            )
+            async with AsyncSession(bind=connection) as session:
+                tenants = await SqlAlchemyTenantRepository(session).list_for_operator()
+            assert any(item.name == "Document Insight Evaluation" for item in tenants)
             await connection.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_operator_document_picker_is_tenant_scoped_and_activated_only() -> None:
+    """A restricted operator can list only current version metadata for one tenant."""
+    engine = create_async_engine(_owner_url())
+    tenant_id, foreign_tenant_id = uuid4(), uuid4()
+    user_id, foreign_user_id = uuid4(), uuid4()
+    active_id, inactive_id, foreign_id = uuid4(), uuid4(), uuid4()
+    active_version_id, foreign_version_id = uuid4(), uuid4()
+    try:
+        async with engine.connect() as connection:
+            async with connection.begin():
+                for current_tenant, current_user in (
+                    (tenant_id, user_id),
+                    (foreign_tenant_id, foreign_user_id),
+                ):
+                    await connection.execute(
+                        text("INSERT INTO tenants (id, name) VALUES (:id, :name)"),
+                        {"id": current_tenant, "name": f"Picker {current_tenant}"},
+                    )
+                    await connection.execute(
+                        text("""INSERT INTO users
+                            (id, tenant_id, email, display_name, password_hash, role)
+                            VALUES (:id, :tenant_id, :email, 'Picker', 'test', 'tenant_admin')"""),
+                        {
+                            "id": current_user,
+                            "tenant_id": current_tenant,
+                            "email": f"picker-{current_user}@example.invalid",
+                        },
+                    )
+                for document_id, current_tenant, current_user, title in (
+                    (active_id, tenant_id, user_id, "Active"),
+                    (inactive_id, tenant_id, user_id, "Inactive"),
+                    (foreign_id, foreign_tenant_id, foreign_user_id, "Foreign"),
+                ):
+                    await connection.execute(
+                        text("""INSERT INTO documents (id, tenant_id, title, created_by)
+                            VALUES (:id, :tenant_id, :title, :created_by)"""),
+                        {
+                            "id": document_id,
+                            "tenant_id": current_tenant,
+                            "title": title,
+                            "created_by": current_user,
+                        },
+                    )
+                for document_id, current_tenant, current_user, version_id in (
+                    (active_id, tenant_id, user_id, active_version_id),
+                    (foreign_id, foreign_tenant_id, foreign_user_id, foreign_version_id),
+                ):
+                    await connection.execute(
+                        text("""INSERT INTO document_versions
+                            (id, document_id, tenant_id, version_number, original_filename,
+                             object_key, media_type, size_bytes, content_sha256, status, created_by)
+                            VALUES (:id, :document_id, :tenant_id, 1, 'test.pdf', :object_key,
+                                    'application/pdf', 1, :sha, 'ready', :created_by)"""),
+                        {
+                            "id": version_id,
+                            "document_id": document_id,
+                            "tenant_id": current_tenant,
+                            "object_key": f"test/{version_id}",
+                            "sha": bytes(32),
+                            "created_by": current_user,
+                        },
+                    )
+                    await connection.execute(
+                        text("""UPDATE documents SET current_ready_version_id = :version_id
+                            WHERE id = :document_id"""),
+                        {"version_id": version_id, "document_id": document_id},
+                    )
+                await connection.execute(text("SET LOCAL ROLE di_profile_operator"))
+                async with AsyncSession(bind=connection) as session:
+                    options = await SqlAlchemyDocumentRepository(session).list_active_for_operator(
+                        tenant_id
+                    )
+                assert [(item.document_id, item.version_id, item.title) for item in options] == [
+                    (active_id, active_version_id, "Active")
+                ]
+                await connection.rollback()
     finally:
         await engine.dispose()
 

@@ -50,3 +50,8 @@ class IndexGenerationRepository(Protocol):
 
     async def referenced_ingestion_profile_ids(self) -> tuple[UUID, ...]:
         """Return profiles still referenced by completed searchable generations."""
+
+    async def has_ready_generation(
+        self, document_version_id: UUID, tenant_id: UUID, ingestion_profile_id: UUID
+    ) -> bool:
+        """Confirm one exact profile produced a ready index for this version."""

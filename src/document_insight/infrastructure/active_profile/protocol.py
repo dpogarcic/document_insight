@@ -30,3 +30,6 @@ class ActiveProfileRepository(Protocol):
 
     async def activate(self, scope: str, kind: str, profile_id: UUID, revision: int) -> None:
         """Advance one locked pointer to its approved bundle."""
+
+    async def create_evaluation_ingestion(self, scope: str, profile_id: UUID) -> None:
+        """Create the first ingestion pointer for one dedicated evaluation tenant."""

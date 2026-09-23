@@ -31,7 +31,11 @@ active profile pointer stored in PostgreSQL may do that.
   fingerprint.
 - A `capability_profile` is an immutable named version of one capability and points to one
   snapshot. Its capability is one of `ner`, `chunking`, `lexical`, `embedding`,
-  `reranking`, or `generation`.
+  `reranking`, or `generation`. Its `status` is `draft`, `validated`, or `retired`.
+  `retired` means the profile's configuration no longer satisfies the current provider
+  schema (for example, a required field was added after it was seeded) and it must never
+  be resolved by a new job or query again; existing records that already reference it keep
+  resolving for historical audit. See ADR 006 for the concrete retirement mechanism.
 - Snapshots include every application-level setting that changes observable behavior.
   Examples include chunk size and overlap; lexical analyzer and ranking configuration;
   explicit provider key, model identifier, configuration revision, vector dimension,
@@ -133,6 +137,47 @@ application supports its adapter and has its required runtime configuration. If 
 or dependency is new, deploy support first while retaining the old active profile, then
 activate it explicitly.
 
+### Evaluation approval before platform activation
+
+An operator selects a tenant when creating each immutable evaluation suite. A platform
+query switch requires a completed, approved tenant-scoped evaluation run tied to the exact
+candidate and currently active baseline. Runs record the tenant, immutable bundle IDs and
+snapshot fingerprints, suite revision and corpus mapping, evaluator revision, cohort
+rankings, and stage measurements. Manual answer-quality scores are required before
+approval. Rejections remain in the audit history and cannot authorize activation.
+
+The Admin Panel may list tenant IDs and names and limited document metadata (ID, title,
+and current activated version ID), but cannot read originals, raw passages, or credentials.
+Operators can see generated answers and citations in run review.
+Its operator login selects a suite tenant; it does not impersonate a tenant user. Each
+case identifies a current user in that tenant. The evaluation worker refreshes that
+user's role and departments and executes the authorized query path with tenant and
+department filters before retrieval. It rejects foreign or inactive identities, foreign
+documents, and stale or unactivated versions. Suite creator and case execution identity
+remain distinct audit fields. A selected corpus may include existing tenant documents;
+selecting their current activated versions in the suite picker is the explicit operator selection. The panel
+stores IDs and labels; source passages stay in the restricted worker, while generated
+answers are persisted for manual review.
+
+The deployment migration also seeds an isolated sample evaluation tenant and a `General`
+department with stable IDs. Runtime `EVALUATION_TENANT_ID` points to that tenant row for
+controlled ingestion comparisons. The migration does not create credentials; test identities
+are provisioned separately so passwords and membership changes remain under the normal
+identity controls.
+The first seeded evaluation-tenant admin can be created by a one-time private setup CLI
+using the restricted authentication database role. It prompts for a password and refuses
+to run once any identity exists in that tenant; later memberships still require the
+administrator-controlled identity flow.
+
+Only the configured isolated sample tenant can select an ingestion bundle for its **future** uploads
+without changing the platform pointer. An ingestion comparison uses separate test
+documents with byte-identical originals, ready activated versions, and distinct index
+generations under baseline and candidate bundles. The query bundle used for the
+comparison must include both lexical and embedding cohorts. The evaluation worker
+checks each source/copy hash and index provenance under a current test-tenant admin
+identity before scoring. This selection is for controlled test data only; it does not
+activate the candidate for other tenants.
+
 ### Effect of capability changes
 
 | Changed capability | Activation effect |
@@ -143,10 +188,13 @@ activate it explicitly.
 | Reranking | A new query profile selects the new reranker for subsequent queries; no document-derived data changes. |
 | Generation | A new query profile selects the new model/prompt behavior for subsequent queries; no document-derived data changes. |
 
-Backfilling and retiring legacy cohorts are separate operational work. This ADR only
-requires that legacy profiles remain readable while referenced by ready index generations,
-and that they are removed from query read cohorts only through another explicit,
-audited activation.
+Backfilling legacy cohorts into a new ingestion or query bundle is separate operational
+work, staged and activated the same way as any other bundle. Retiring a capability profile
+so it can never be selected again is a distinct, narrower operation: it marks the profile
+`retired` without touching any bundle that already references it. This ADR only requires
+that legacy profiles remain readable while referenced by ready index generations, and that
+a retired profile is excluded from every future selection surface. See ADR 006 for the
+concrete retirement mechanism and its effect on the Admin Panel's pickers.
 
 ### Current implementation transition
 

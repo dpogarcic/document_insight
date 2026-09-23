@@ -39,6 +39,12 @@ from document_insight.infrastructure.configuration_snapshot.repository import (
 )
 from document_insight.infrastructure.database.session import get_session_factory
 from document_insight.infrastructure.database.transaction import SqlAlchemyTransactionManager
+from document_insight.infrastructure.evaluation_gate_review.repository import (
+    SqlAlchemyEvaluationGateReviewRepository,
+)
+from document_insight.infrastructure.evaluation_run.repository import (
+    SqlAlchemyEvaluationRunRepository,
+)
 from document_insight.infrastructure.index_generation.repository import (
     SqlAlchemyIndexGenerationRepository,
 )
@@ -93,6 +99,9 @@ def _services(request: Request, _: Operator, session: OperatorSession) -> PanelS
             SqlAlchemyProfileActivationRepository(session),
             SqlAlchemyTransactionManager(session),
             bool(settings.mistral_api_key and settings.mistral_api_key.get_secret_value()),
+            SqlAlchemyEvaluationRunRepository(session),
+            settings.evaluation_tenant_id,
+            SqlAlchemyEvaluationGateReviewRepository(session),
         ),
         ProfileCatalogService(capabilities, ingestions, queries, snapshots, active),
     )
@@ -275,6 +284,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise RuntimeError("Admin panel operator database and HTTP credentials are required")
         yield
 
+    def _is_suite_form_path(path: str) -> bool:
+        """The create and edit suite pages are the only ones that run form code."""
+        if path == "/evaluations/suites/new":
+            return True
+        parts = path.strip("/").split("/")
+        return len(parts) == 4 and parts[:2] == ["evaluations", "suites"] and parts[3] == "edit"
+
     application = FastAPI(
         title="Document Insight Admin",
         docs_url=None,
@@ -289,13 +305,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def security_headers(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        """Prevent caching, framing, and script execution on operator pages."""
+        """Prevent caching and framing; allow suite form code only on its page."""
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
+        script_policy = (
+            "script-src 'self'; connect-src 'self'; "
+            if _is_suite_form_path(request.url.path)
+            else ""
+        )
         response.headers["Content-Security-Policy"] = (
-            "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'"
+            "default-src 'none'; style-src 'self'; "
+            f"{script_policy}form-action 'self'; frame-ancestors 'none'"
         )
         return response
 
@@ -501,4 +523,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return _error_page(request, str(error))
         return _redirect(f"/{'ingestions' if kind == 'ingestion' else 'queries'}/{profile_id}")
 
+    from document_insight.admin_panel.evaluation_routes import create_evaluation_routes
+
+    create_evaluation_routes(application)
     return application

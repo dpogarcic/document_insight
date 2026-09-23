@@ -44,6 +44,15 @@ class SqlAlchemyDocumentVersionRepository(DocumentVersionRepository):
         )
         return document_id
 
+    async def get_content_sha256(self, version_id: UUID, tenant_id: UUID) -> str | None:
+        digest = await self._session.scalar(
+            select(DocumentVersionModel.content_sha256).where(
+                DocumentVersionModel.id == version_id,
+                DocumentVersionModel.tenant_id == tenant_id,
+            )
+        )
+        return None if digest is None else digest.hex()
+
     async def list_latest_for_document_ids(
         self, document_ids: tuple[UUID, ...], tenant_id: UUID
     ) -> tuple[LatestDocumentVersion, ...]:

@@ -2,8 +2,10 @@
 
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlsplit
+from uuid import UUID
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -36,6 +38,37 @@ class Settings(BaseSettings):
     admin_panel_username: str | None = None
     admin_panel_password: SecretStr | None = None
     admin_panel_secure_cookies: bool = False
+    api_public_base_url: str = "http://127.0.0.1:8000"
+
+    @field_validator("api_public_base_url")
+    @classmethod
+    def _valid_api_public_base_url(cls, value: str) -> str:
+        """Keep the upload link on an explicit HTTP origin without embedded secrets."""
+        parsed = urlsplit(value)
+        try:
+            hostname = parsed.hostname
+            _ = parsed.port
+        except ValueError as error:
+            raise ValueError("API_PUBLIC_BASE_URL must be an HTTP(S) base URL") from error
+        if (
+            parsed.scheme not in {"http", "https"}
+            or hostname is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("API_PUBLIC_BASE_URL must be an HTTP(S) base URL")
+        return value.rstrip("/")
+
+    evaluation_tenant_id: UUID | None = None
+
+    @field_validator("evaluation_tenant_id", mode="before")
+    @classmethod
+    def _blank_evaluation_tenant(cls, value: object) -> object:
+        """Allow optional Compose profile services to start before a tenant is selected."""
+        return None if value == "" else value
+
     jwt_secret_key: SecretStr
     jwt_algorithm: Literal["HS256"] = "HS256"
     jwt_issuer: str = "document-insight"
@@ -51,6 +84,7 @@ class Settings(BaseSettings):
     query_rate_limit_requests: int = Field(default=30, ge=1, le=10_000)
     query_rate_limit_window_seconds: int = Field(default=60, ge=1, le=86_400)
     rq_ingestion_queue_name: str = "ingestion"
+    rq_evaluation_queue_name: str = "evaluation"
     job_reconciliation_interval_seconds: int = Field(default=60, ge=5, le=3600)
     metrics_bearer_token: SecretStr | None = None
     prometheus_multiproc_dir: str | None = None

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Evaluation test documents · Document Insight</title>
+  <link rel="stylesheet" href="/evaluation-corpus/assets/upload.css">
+  <script src="/evaluation-corpus/assets/upload.js" defer></script>
+</head>
+<body>
+  <main class="layout">
+    <header>
+      <span class="eyebrow">Evaluation corpus</span>
+      <h1>Upload test documents</h1>
+      <p>Upload through the document API using an identity in the tenant whose documents you are evaluating. The Admin Panel never receives the file or your login.</p>
+    </header>
+
+    <section class="panel" aria-labelledby="sign-in-title">
+      <h2 id="sign-in-title">1. Sign in to the selected tenant</h2>
+      <!-- selected tenant context -->
+      <p>Use a tenant editor or admin. Only an admin can activate a processed version for use in a suite.</p>
+      <form id="login-form">
+        <label>Email<input name="email" type="email" autocomplete="username" required></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit">Sign in</button>
+      </form>
+      <p id="identity-status" class="status" role="status">Your credentials and access token stay in this tab and are cleared when it closes.</p>
+    </section>
+
+    <section id="upload-section" class="panel" aria-labelledby="upload-title" hidden>
+      <h2 id="upload-title">2. Upload a new document</h2>
+      <p>PDF, PNG, or JPEG, up to 25 MiB. Ingestion policy comparisons are limited to the isolated test tenant.</p>
+      <form id="upload-form">
+        <label>Test document<input name="file" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg" required></label>
+        <button type="submit">Upload document</button>
+      </form>
+      <p id="upload-status" class="status" role="status"></p>
+    </section>
+
+    <section id="results-section" class="panel" aria-labelledby="results-title" hidden>
+      <h2 id="results-title">3. Process and activate</h2>
+      <p>When processing reaches Ready, activate the version as a tenant admin. Copy its version ID into the evaluation suite’s corpus field.</p>
+      <div id="results"></div>
+    </section>
+  </main>
+</body>
+</html>

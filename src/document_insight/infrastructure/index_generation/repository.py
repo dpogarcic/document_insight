@@ -86,3 +86,18 @@ class SqlAlchemyIndexGenerationRepository(IndexGenerationRepository):
                 .distinct()
             )
         )
+
+    async def has_ready_generation(
+        self, document_version_id: UUID, tenant_id: UUID, ingestion_profile_id: UUID
+    ) -> bool:
+        return (
+            await self._session.scalar(
+                select(IndexGenerationModel.id).where(
+                    IndexGenerationModel.document_version_id == document_version_id,
+                    IndexGenerationModel.tenant_id == tenant_id,
+                    IndexGenerationModel.ingestion_profile_id == ingestion_profile_id,
+                    IndexGenerationModel.status == "ready",
+                )
+            )
+            is not None
+        )

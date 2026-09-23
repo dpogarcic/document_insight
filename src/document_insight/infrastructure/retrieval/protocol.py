@@ -11,6 +11,7 @@ class RetrievalScope:
 
     tenant_id: UUID
     department_ids: tuple[UUID, ...]
+    allowed_version_ids: tuple[UUID, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +25,8 @@ class RetrievedChunk:
     text: str
     page_number: int | None
     score: float
+    start_offset: int = 0
+    end_offset: int = 0
 
 
 @dataclass(frozen=True, slots=True)

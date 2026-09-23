@@ -25,6 +25,12 @@ from document_insight.infrastructure.configuration_snapshot.repository import (
 )
 from document_insight.infrastructure.database.session import get_session_factory
 from document_insight.infrastructure.database.transaction import SqlAlchemyTransactionManager
+from document_insight.infrastructure.evaluation_gate_review.repository import (
+    SqlAlchemyEvaluationGateReviewRepository,
+)
+from document_insight.infrastructure.evaluation_run.repository import (
+    SqlAlchemyEvaluationRunRepository,
+)
 from document_insight.infrastructure.index_generation.repository import (
     SqlAlchemyIndexGenerationRepository,
 )
@@ -103,6 +109,9 @@ async def _run(args: argparse.Namespace) -> None:
             SqlAlchemyProfileActivationRepository(session),
             SqlAlchemyTransactionManager(session),
             bool(settings.mistral_api_key and settings.mistral_api_key.get_secret_value()),
+            SqlAlchemyEvaluationRunRepository(session),
+            settings.evaluation_tenant_id,
+            SqlAlchemyEvaluationGateReviewRepository(session),
         )
         if args.command == "create-capability":
             result: UUID | int = await service.create_capability(
