@@ -127,15 +127,28 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Two separate Trivy invocations rather than one `format: sarif` scan with an
+      # exit-code gate: that combination has a known trivy-action bug where the SARIF
+      # path doesn't reliably apply the same severity/ignore-unfixed filtering as the
+      # exit-code check, failing the build with zero actual findings in the report.
       - name: Scan image for known vulnerabilities
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: document-insight:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Generate vulnerability report
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: document-insight:ci
           format: sarif
           output: trivy-results.sarif
           severity: CRITICAL,HIGH
           ignore-unfixed: true
-          exit-code: "1"
+          exit-code: "0"
 
       - name: Upload vulnerability report
         if: always()
